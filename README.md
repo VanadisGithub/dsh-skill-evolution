@@ -107,6 +107,16 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 - 技能卡片：结晶信号、工具序列、版本与改进次数；展开查看完整 SKILL.md
 - 单个删除 / 清空全部（均为两步确认）；删除会同时反注册并删除磁盘文件
 
+## 截图 / Screenshots
+
+设置页「技能进化」总览——信号配置、实时模式统计与已结晶技能卡片：
+
+![Settings section overview](assets/settings-overview.png)
+
+展开技能卡片——结晶信号、工具序列与完整 SKILL.md 内容：
+
+![Expanded skill card with crystallization signals](assets/skill-detail.png)
+
 宿主侧另暴露认证 RPC 通道 `/skill-evolution`：`list` / `get` / `remove` / `clear`。
 
 ## 数据与隐私
