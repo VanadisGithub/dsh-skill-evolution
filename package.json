@@ -1,0 +1,48 @@
+{
+  "name": "dsh-skill-evolution",
+  "version": "1.1.0",
+  "description": "DSH web plugin: Hermes-style skill self-evolution. Watches agent execution traces, crystallizes reusable skills from successful turns via LLM review, progressively improves them, and manages everything in a dedicated Settings section.",
+  "type": "module",
+  "license": "MIT",
+  "author": "VanadisGithub",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VanadisGithub/dsh-skill-evolution.git"
+  },
+  "homepage": "https://github.com/VanadisGithub/dsh-skill-evolution#readme",
+  "bugs": {
+    "url": "https://github.com/VanadisGithub/dsh-skill-evolution/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "skill",
+    "self-evolution",
+    "hermes",
+    "agent-memory"
+  ],
+  "main": "plugin.mjs",
+  "exports": {
+    ".": "./plugin.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "files": [
+    "plugin.mjs",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ]
+}
