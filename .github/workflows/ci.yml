@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check host half
+        run: node --check plugin.mjs
+      - name: Syntax check client half
+        run: node --check client.js
+      - name: Validate package manifest
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const assert = (cond, msg) => { if (!cond) { console.error("manifest error:", msg); process.exit(1); } };
+            assert(pkg.name, "missing name");
+            assert(pkg.main === "plugin.mjs", "main must be plugin.mjs");
+            assert(pkg.exports && pkg.exports["./client"] === "./client.js", "exports[./client] must be ./client.js");
+            assert(pkg.dsh && pkg.dsh.bundle && pkg.dsh.bundle.patch === "./cordis.patch.yml", "dsh.bundle.patch must point at ./cordis.patch.yml");
+            assert(pkg.dsh.client && pkg.dsh.client.platform === "web", "dsh.client.platform must be web");
+            console.log("manifest OK:", pkg.name, pkg.version);
+          '
+      - name: Validate bundle patch file
+        run: |
+          test -f cordis.patch.yml || { echo "cordis.patch.yml missing"; exit 1; }
+          grep -q "insert" cordis.patch.yml || { echo "patch has no insert entry"; exit 1; }
+          echo "patch OK"
+      - name: Host smoke test
+        run: node test/smoke.mjs
