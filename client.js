@@ -684,7 +684,7 @@ window.__ModuleLoader__.load({
 				h("div", { className: "dse-head" },
 					h("div", { className: "dse-headTexts" },
 						h("h3", {}, "技能进化 · Skill Evolution"),
-						h("p", { className: "dse-sub" }, "Hermes 式自进化：每个成功回合结束时按信号评审，把值得复用的工作流提炼为技能，并在后续使用中持续改进")),
+						h("p", { className: "dse-sub" }, "事件驱动自进化：每个成功回合结束时按信号评审，把值得复用的工作流提炼为技能，并在后续使用中持续改进")),
 					h("div", { className: "dse-actions" },
 						config ? h(MasterSwitch, { config, onChanged: load }) : null,
 						h("button", { type: "button", className: "dse-btn", onClick: load, disabled: view.status === "loading" }, "刷新"))),
@@ -705,7 +705,7 @@ window.__ModuleLoader__.load({
 							skills.length === 0
 								? h("div", { className: "dse-empty" },
 									h("div", {}, h("b", {}, "还没有进化技能")),
-									h("div", {}, "每个成功回合结束时，插件按 Hermes 模型检测信号：复杂任务（≥" + config.minToolCalls + " 次工具调用）、"),
+									h("div", {}, "每个成功回合结束时，插件检测三类信号：复杂任务（≥" + config.minToolCalls + " 次工具调用）、"),
 									h("div", {}, "从错误中恢复、或同一序列重复 ≥" + config.minPatternOccurrences + " 次。任一信号触发 LLM 评审，"),
 									h("div", {}, "值得复用的工作流会被提炼为技能并注册；后续同类执行还会把新经验合并进已有技能（版本递增）。"),
 									h("div", {}, "评审统计在本进程内存中进行，服务重启后重新累计；已生成的技能会持久保存。"))

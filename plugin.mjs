@@ -1,9 +1,8 @@
 /**
- * Hermes-style skill self-evolution plugin (self-contained).
+ * Event-driven skill self-evolution plugin (self-contained).
  *
- * Crystallization model — adapted from Nous Research's Hermes Agent
- * (https://hermes-agent.nousresearch.com/docs/user-guide/features/skills and
- * NousResearch/hermes-agent `agent/background_review.py`):
+ * Crystallization model — evaluate every completed turn by signals, distill
+ * workflows worth reusing into living skills:
  *
  *  - EVENT-DRIVEN, evaluated when each turn completes — not pure frequency
  *    counting. Any ONE fired signal sends the turn to an LLM review:
@@ -510,7 +509,7 @@ export function apply(ctx, config = {}) {
   }
 
   // ------------------------------------------------------------------
-  // Hermes-style signal detection
+  // Signal detection
   // ------------------------------------------------------------------
 
   function updatePattern(trace) {
@@ -538,7 +537,7 @@ export function apply(ctx, config = {}) {
   }
 
   /**
-   * Hermes trigger conditions, adapted to host-side trace evidence. Any one
+   * Signal conditions derived from host-side trace evidence. Any one
    * fired signal warrants an LLM review of the turn — except a lone `complex`
    * signal when the corroboration gate is on: it must be accompanied by
    * `recovered` or `repeated` to reach the reviewer.
@@ -573,7 +572,7 @@ export function apply(ctx, config = {}) {
   }
 
   // ------------------------------------------------------------------
-  // LLM review (Hermes background-review style)
+  // LLM review (event-driven background review)
   // ------------------------------------------------------------------
 
   async function callLlm(system, userContent) {
@@ -602,7 +601,7 @@ export function apply(ctx, config = {}) {
   }
 
   const REVIEW_SYSTEM_PROMPT = [
-    'You are the skill-crystallization reviewer for an AI agent harness, following the Hermes self-evolution model.',
+    'You are the skill-crystallization reviewer for an AI agent harness, distilling reusable workflows from completed execution evidence.',
     'You receive ONE completed agent turn as evidence: fired signals, the user intent, the tool sequence, and per-step outcomes.',
     'Decide whether this workflow deserves to become a reusable skill.',
     '',
@@ -649,7 +648,7 @@ export function apply(ctx, config = {}) {
   }
 
   const IMPROVE_SYSTEM_PROMPT = [
-    'You are improving an EXISTING evolved skill of an AI agent harness with fresh execution evidence (Hermes-style progressive improvement).',
+    'You are improving an EXISTING evolved skill of an AI agent harness with fresh execution evidence (progressive improvement).',
     'Fold genuinely new lessons into the existing body — especially pitfalls recovered from in the new evidence.',
     'Keep what works; do not rewrite for style. Preserve the # Title / ## When to Use / ## Procedure / ## Pitfalls / ## Verification structure.',
     'If the evidence teaches nothing new, answer NOTHING_TO_SAVE.',
@@ -824,7 +823,7 @@ export function apply(ctx, config = {}) {
   }
 
   /**
-   * Turn-end entry point: Hermes-style event-driven evaluation.
+   * Turn-end entry point: event-driven evaluation.
    * Unresolved failures are never crystallized; noisy repeats of
    * already-declined sequences are skipped.
    */

@@ -5,7 +5,7 @@
  *   1. a successful 6-call turn with one failed step fires complex+recovered
  *   2. the (mocked) reviewer LLM answers VERDICT: SAVE
  *   3. the skill is parsed, persisted, and registered into the mock catalog
- *   4. a failed turn is never reviewed (Hermes: unresolved failures never crystallize)
+ *   4. a failed turn is never reviewed (unresolved failures never crystallize)
  *   5. RPC list/get/remove round-trip, including file deletion
  *
  * Run: node test/smoke.mjs
