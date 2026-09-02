@@ -100,6 +100,7 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 | `autoRegister` | `true` | 结晶后自动注册进技能目录 |
 | `llmProvider` / `llmModel` | `deepseek` / `deepseek-chat` | 评审用的模型（必须是部署中存在的 provider） |
 | `skillLanguage` | `en` | 生成技能的语言：`zh`（中文）或 `en`（英文）。NAME 与 SKILL.md 章节标题恒为英文，正文与 DESCRIPTION 跟随该语言 |
+| `enabled` | `true` | 总开关：`false` 时不观察回合、不评审结晶（已有技能保持注册）。**也可直接在设置面板右上角切换** |
 | `maxEvolvedSkills` | `20` | 进化技能容量上限 |
 | `improvementEvery` | `3` | 每 N 次同序列重跑触发一次改进评审 |
 | `maxImprovementsPerProcess` | `5` | 每进程每技能改进次数上限 |
@@ -137,15 +138,22 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 
 ## 管理面板
 
-设置 → **技能进化**：
+设置 → **技能进化**，两个 tab：
+
+**技能** tab：
+
+- 技能卡片：**价值**（高/中/低——按出现次数、改进次数与版本估算）、**版本**、**调用次数**（通过宿主 `skill` 工具加载的次数）、**更新时间**；展开查看结晶信号、工具序列与完整 SKILL.md
+- 单个删除 / 清空全部（均为两步确认）；删除会同时反注册并删除磁盘文件
+
+**设置** tab：
 
 - 配置与信号开关一览、实时模式统计（各序列出现次数/成功率/是否结晶）
 - **评审模型编辑器**：改 provider/model、保存持久化、一键恢复默认
 - **生成语言下拉**：中文 / English，改动即存并持久化，下次评审即生效
-- **阈值与控制**：全部数值阈值 + 信号/闸门/自动注册开关，草稿-保存，一键恢复默认
+- **阈值与控制**：常用数值阈值（每项带含义说明）+ 信号/闸门/自动注册开关，草稿-保存，一键恢复默认；内部观察参数（`maxEvidenceSteps` 等）不在 UI 里，走挂载配置
 - **评审提示词**：结晶与改进两段系统提示词可自定义，留空保存即恢复内置默认
-- 技能卡片：结晶信号、工具序列、版本与改进次数；展开查看完整 SKILL.md
-- 单个删除 / 清空全部（均为两步确认）；删除会同时反注册并删除磁盘文件
+
+**总开关**（分区右上角）：停用后不再观察回合、不再评审结晶；已生成的技能保持注册可用。状态持久化，重启后保持。
 
 ## 截图 / Screenshots
 

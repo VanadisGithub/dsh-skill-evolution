@@ -148,6 +148,10 @@ export function apply(ctx, config = {}) {
   let skillLanguage = configSkillLanguage
   // Review-prompt overrides: undefined means "use the built-in default".
   const promptOverrides = { review: undefined, improve: undefined }
+  // Master switch from the Settings UI: when off, turns are not observed and
+  // nothing is reviewed. Already-crystallized skills stay registered.
+  const configEnabled = config.enabled !== false
+  let enabled = configEnabled
 
   /** @type {Map<string, {sessionId: string, startedAt: string, steps: Array, callIdToTool: Map, intent: string}>} */
   const activeTraces = new Map()
@@ -310,6 +314,7 @@ export function apply(ctx, config = {}) {
       }
       if (modelFromRuntime) modelSource = 'runtime'
       if (SKILL_LANGUAGES.includes(rec.skillLanguage)) skillLanguage = rec.skillLanguage
+      if (typeof rec.enabled === 'boolean') enabled = rec.enabled
       if (safeRecord(rec.tuning)) {
         try {
           applyTuningPatch(rec.tuning)
@@ -335,6 +340,7 @@ export function apply(ctx, config = {}) {
       rec.llmModel = llmModel
     }
     if (skillLanguage !== configSkillLanguage) rec.skillLanguage = skillLanguage
+    if (enabled !== configEnabled) rec.enabled = enabled
     if (Object.keys(tuningOverrides).length > 0) rec.tuning = JSON.parse(JSON.stringify(tuningOverrides))
     const prompts = {}
     if (promptOverrides.review !== undefined) prompts.review = promptOverrides.review
@@ -375,6 +381,7 @@ export function apply(ctx, config = {}) {
       successRate: typeof rec.successRate === 'number' ? rec.successRate : 1,
       signals: Array.isArray(rec.signals) ? rec.signals.filter(s => typeof s === 'string') : [],
       improvements: Number.isSafeInteger(rec.improvements) ? rec.improvements : 0,
+      invocations: Number.isSafeInteger(rec.invocations) ? rec.invocations : 0,
       intents: Array.isArray(rec.intents) ? rec.intents.filter(i => typeof i === 'string') : [],
       createdAt: typeof rec.createdAt === 'string' ? rec.createdAt : new Date().toISOString(),
       updatedAt: typeof rec.updatedAt === 'string' ? rec.updatedAt : new Date().toISOString(),
@@ -833,6 +840,7 @@ export function apply(ctx, config = {}) {
       successRate: record.successRate,
       signals: record.signals,
       improvements: record.improvements,
+      invocations: record.invocations,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       registered: typeof entry.dispose === 'function',
@@ -874,6 +882,7 @@ export function apply(ctx, config = {}) {
       llmModel,
       modelSource,
       skillLanguage,
+      enabled,
       tuningOverrides: JSON.parse(JSON.stringify(tuningOverrides)),
       tuningBounds: { ints: { ...INT_TUNABLES }, rates: { ...RATE_TUNABLES } },
       prompts: {
@@ -890,6 +899,7 @@ export function apply(ctx, config = {}) {
         llmProvider: config.llmProvider ?? 'deepseek',
         llmModel: config.llmModel ?? 'deepseek-chat',
         skillLanguage: configSkillLanguage,
+        enabled: configEnabled,
       },
     }
   }
@@ -958,6 +968,13 @@ export function apply(ctx, config = {}) {
         persistRuntimeConfig()
         ctx.logger.info(`skill-evolution: generated-skill language set to ${skillLanguage} (persisted)`)
         return ok({ skillLanguage })
+      }
+      case 'setEnabled': {
+        if (typeof args.enabled !== 'boolean') return fail('skill-evolution/bad-enabled', 'enabled must be a boolean')
+        enabled = args.enabled
+        persistRuntimeConfig()
+        ctx.logger.info(`skill-evolution: observation ${enabled ? 'resumed' : 'paused'} from the Settings UI (persisted)`)
+        return ok({ enabled })
       }
       case 'setTuning': {
         try {
@@ -1032,6 +1049,28 @@ export function apply(ctx, config = {}) {
   // Activation
   // ------------------------------------------------------------------
 
+  /**
+   * Count a load of one evolved skill through the host `skill` tool, so the
+   * Settings UI can show real usage instead of only crystallization counts.
+   * @param {string} tool - tool name from the tool/call event
+   * @param {string} args - raw arguments JSON for that call
+   */
+  function noteSkillInvocation(tool, args) {
+    if (tool !== 'skill' || typeof args !== 'string') return
+    let name = ''
+    try {
+      const parsed = safeRecord(JSON.parse(args))
+      if (parsed && typeof parsed.name === 'string') name = parsed.name
+    } catch {
+      return
+    }
+    if (!SKILL_NAME_RE.test(name)) return
+    const entry = evolvedSkills.get(name)
+    if (!entry) return
+    entry.record = { ...entry.record, invocations: entry.record.invocations + 1 }
+    persist(entry.record)
+  }
+
   loadRuntimeConfig()
   if (modelSource === 'runtime') {
     ctx.logger.info(`skill-evolution: reviewer model from runtime-config.json: ${llmProvider}/${llmModel}`)
@@ -1053,6 +1092,7 @@ export function apply(ctx, config = {}) {
   })
 
   ctx.on('session/event', (session, event) => {
+    if (!enabled) return
     const sessionId = String(session.id)
 
     if (event.type === 'user/message') {
@@ -1067,6 +1107,7 @@ export function apply(ctx, config = {}) {
       }
       if (text) recordUserIntent(sessionId, text)
     } else if (event.type === 'tool/call') {
+      noteSkillInvocation(event.data.name, event.data.arguments)
       recordToolCall(sessionId, String(event.data.callId), event.data.name, event.data.arguments)
     } else if (event.type === 'tool/result') {
       const callId = String(event.data.message.source.callId)

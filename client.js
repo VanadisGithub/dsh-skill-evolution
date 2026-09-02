@@ -87,6 +87,17 @@ window.__ModuleLoader__.load({
 .dse-textarea{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);white-space:pre;overflow:auto;border-radius:8px;font-family:var(--ds-font-family-code);font-size:11.5px;line-height:17px;min-height:150px;padding:8px 10px;resize:vertical;width:100%}
 .dse-textarea:focus{border-color:var(--dsw-alias-brand-primary);outline:none}
 .dse-panelActions{justify-content:flex-end;gap:8px;display:flex}
+.dse-tabs{border-bottom:1px solid var(--dsw-alias-border-l2);gap:2px;display:flex}
+.dse-tab{border:0;background:0 0;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:13px;margin-bottom:-1px;padding:7px 14px;border-bottom:2px solid transparent}
+.dse-tab:hover{color:var(--dsw-alias-label-secondary)}
+.dse-tab[data-active=true]{color:var(--dsw-alias-label-primary);font-weight:600;border-bottom-color:var(--dsw-alias-brand-primary)}
+.dse-switch{align-items:center;gap:6px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:12.5px;display:inline-flex;user-select:none}
+.dse-switch input{accent-color:var(--dsw-alias-brand-primary);cursor:pointer;margin:0;width:15px;height:15px}
+.dse-switch[data-off=true]{color:var(--dsw-alias-state-warning-primary,#b45309)}
+.dse-chip[data-kind=high]{background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);color:var(--dsw-alias-state-success-primary);border-color:transparent}
+.dse-chip[data-kind=medium]{background:color-mix(in srgb, var(--dsw-alias-state-warning-primary,#b45309) 12%, transparent);color:var(--dsw-alias-state-warning-primary,#b45309);border-color:transparent}
+.dse-chip[data-kind=low]{color:var(--dsw-alias-label-tertiary)}
+.dse-help{color:var(--dsw-alias-label-tertiary);font-size:10.5px;line-height:14px}
 @media (width<=680px){.dse-head{flex-direction:column}}
 `;
 
@@ -133,6 +144,16 @@ window.__ModuleLoader__.load({
 		function pct(rate) {
 			return Math.round((typeof rate === "number" ? rate : 0) * 100) + "%";
 		}
+
+		// Heuristic value rating: repeated evidence or folded-in improvements
+		// promote a skill above a single-occurrence crystallization.
+		function valueOf(summary) {
+			if ((summary.occurrences || 1) >= 3 || (summary.improvements || 0) >= 1) return "high";
+			if ((summary.occurrences || 1) >= 2 || (summary.version || 1) > 1) return "medium";
+			return "low";
+		}
+
+		const VALUE_LABELS = { high: "价值：高", medium: "价值：中", low: "价值：低" };
 
 		function Chevron() {
 			return h("svg", { className: "dse-chevron", width: 12, height: 12, viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" },
@@ -185,6 +206,7 @@ window.__ModuleLoader__.load({
 					.catch(() => setBusy(false));
 			}, [confirming, onRemoved, summary.name]);
 
+			const value = valueOf(summary);
 			return h("div", { className: "dse-card", "data-open": open },
 				h("button", { type: "button", className: "dse-cardHead", onClick: toggle, "aria-expanded": open },
 					h("span", { className: "dse-cardTitle" },
@@ -192,7 +214,10 @@ window.__ModuleLoader__.load({
 						summary.description ? h("span", { className: "dse-desc" }, summary.description) : null),
 					h("span", { className: "dse-cardTrailing" },
 						h("span", { className: "dse-dot", "data-on": summary.registered, title: summary.registered ? "已注册到技能目录" : "未注册（autoRegister 关闭）" }),
-						"v" + summary.version + " · " + summary.occurrences + "次" + (summary.improvements ? " · 改进" + summary.improvements + "次" : ""),
+						h("span", { className: "dse-chip", "data-kind": value, title: "按出现次数、改进次数与版本估算" }, VALUE_LABELS[value]),
+						"v" + summary.version,
+						(summary.invocations || 0) + " 次调用",
+						"更新于 " + fmtTime(summary.updatedAt),
 						h(Chevron))),
 				open ? h("div", { className: "dse-cardBody" },
 					Array.isArray(summary.signals) && summary.signals.length > 0
@@ -205,7 +230,7 @@ window.__ModuleLoader__.load({
 						h(ToolChips, { sequence: summary.toolSequence })),
 					h("div", { className: "dse-metaRow" },
 						h("span", {}, "创建于 " + fmtTime(summary.createdAt)),
-						summary.updatedAt !== summary.createdAt ? h("span", {}, "· 更新于 " + fmtTime(summary.updatedAt)) : null,
+						h("span", {}, "· 出现 " + summary.occurrences + " 次" + (summary.improvements ? " · 改进 " + summary.improvements + " 次" : "")),
 						summary.sourcePatternId ? h("span", {}, "· 来源 " + summary.sourcePatternId) : null),
 					detailError !== undefined
 						? h("div", { className: "dse-failure" }, "加载内容失败：" + detailError)
@@ -352,25 +377,24 @@ window.__ModuleLoader__.load({
 						: h("p", { className: "dse-modelHint" }, "当前值来自挂载配置；在此保存后将持久化覆盖，重启后仍生效"));
 		}
 
+		// Only user-meaningful knobs are exposed; internal observation limits
+		// (maxEvidenceSteps, maxImprovementsPerProcess, maxStepTextLength,
+		// maxTracesPerSession) stay mount-config-only.
 		const NUM_TUNABLES = [
-			["minToolCalls", "complex 阈值：工具调用数"],
-			["minPatternOccurrences", "repeated 阈值：序列出现次数"],
-			["minSuccessRate", "repeated 成功率下限（0-1）"],
-			["minTraceSteps", "轨迹最小步数"],
-			["maxEvidenceSteps", "送评审的最大步骤数"],
-			["improvementEvery", "每 N 次同序列跑一次改进评审"],
-			["maxImprovementsPerProcess", "每进程每技能改进次数上限"],
-			["maxEvolvedSkills", "进化技能容量上限"],
-			["maxStepTextLength", "每步文本截断长度"],
-			["maxTracesPerSession", "每会话保留轨迹数"],
+			["minToolCalls", "complex 阈值：工具调用数", "成功回合的工具调用数达到该值，视为完成了一次复杂任务"],
+			["minPatternOccurrences", "repeated 阈值：序列出现次数", "同一工具序列重复出现达到该次数且成功率达标，触发重复学习"],
+			["minSuccessRate", "repeated 成功率下限", "触发 repeated 信号要求该序列的历史成功率（0-1）"],
+			["minTraceSteps", "轨迹最小步数", "少于该步数的回合直接忽略，用于过滤琐碎操作"],
+			["improvementEvery", "改进评审频率", "同一序列每重跑该次数，把新经验合并进已有技能（版本递增）"],
+			["maxEvolvedSkills", "技能容量上限", "最多保留多少个进化技能，达到上限后不再结晶新技能"],
 		];
 
 		const BOOL_TUNABLES = [
-			["signals.complex", "信号：complex（复杂任务）"],
-			["signals.recovered", "信号：recovered（错误恢复）"],
-			["signals.repeated", "信号：repeated（序列重复）"],
-			["complexRequiresCorroboration", "闸门：单独 complex 需佐证"],
-			["autoRegister", "结晶后自动注册进技能目录"],
+			["signals.complex", "信号：复杂任务", "成功且工具调用数达到阈值的回合送 LLM 评审"],
+			["signals.recovered", "信号：错误恢复", "有失败步骤但最终成功的回合送评审（找到了绕行路径）"],
+			["signals.repeated", "信号：序列重复", "重复出现且成功率达标的工具序列送评审"],
+			["complexRequiresCorroboration", "闸门：complex 需佐证", "仅 complex 单独触发时不送审，需叠加错误恢复或序列重复"],
+			["autoRegister", "自动注册", "结晶的技能自动注册进技能目录，供 agent 直接调用"],
 		];
 
 		function TuningPanel({ config, onChanged }) {
@@ -434,7 +458,7 @@ window.__ModuleLoader__.load({
 			return h("details", { className: "dse-panel" },
 				h("summary", {}, "阈值与控制" + (overridden ? "（已定制：" + overriddenKeys.join("、") + "）" : "")),
 				h("div", { className: "dse-grid" },
-					NUM_TUNABLES.map(([key, label]) => {
+					NUM_TUNABLES.map(([key, label, help]) => {
 						const range = rangeOf(key);
 						return h("label", { key, className: "dse-field" },
 							h("span", {}, label),
@@ -445,10 +469,11 @@ window.__ModuleLoader__.load({
 								min: range ? range[0] : undefined,
 								max: range ? range[1] : undefined,
 								onChange: (e) => setDraft({ ...draft, numbers: { ...draft.numbers, [key]: e.target.value } }),
-							}));
+							}),
+							h("span", { className: "dse-help" }, help));
 					})),
 				h("div", { className: "dse-toggles" },
-					BOOL_TUNABLES.map(([key, label]) => h("label", { key, className: "dse-toggle" },
+					BOOL_TUNABLES.map(([key, label, title]) => h("label", { key, className: "dse-toggle", title },
 						h("input", {
 							type: "checkbox",
 							checked: !!draft.bools[key],
@@ -508,8 +533,28 @@ window.__ModuleLoader__.load({
 				message ? h("p", { className: message.ok ? "dse-modelSaved" : "dse-failure" }, message.text) : null);
 		}
 
+		function MasterSwitch({ config, onChanged }) {
+			const [busy, setBusy] = useState(false);
+			const onToggle = useCallback((e) => {
+				setBusy(true);
+				rpc("setEnabled", { enabled: e.target.checked })
+					.then(() => { setBusy(false); onChanged(); })
+					.catch(() => { setBusy(false); onChanged(); });
+			}, [onChanged]);
+			return h("label", {
+				className: "dse-switch",
+				"data-off": !config.enabled,
+				title: config.enabled
+					? "观察与结晶运行中；关闭后不再观察回合、不再评审，已生成的技能保持可用"
+					: "已停用：不观察回合、不评审、不结晶；已生成的技能保持可用",
+			},
+				h("input", { type: "checkbox", checked: !!config.enabled, disabled: busy, onChange: onToggle }),
+				h("span", {}, config.enabled ? "插件已启用" : "插件已停用"));
+		}
+
 		function SkillEvolutionSection() {
 			const [view, setView] = useState({ status: "loading" });
+			const [tab, setTab] = useState("skills");
 			const [confirmClear, setConfirmClear] = useState(false);
 			const [busy, setBusy] = useState(false);
 			const confirmTimer = useRef(undefined);
@@ -559,46 +604,55 @@ window.__ModuleLoader__.load({
 						h("h3", {}, "技能进化 · Skill Evolution"),
 						h("p", { className: "dse-sub" }, "Hermes 式自进化：每个成功回合结束时按信号评审，把值得复用的工作流提炼为技能，并在后续使用中持续改进")),
 					h("div", { className: "dse-actions" },
+						config ? h(MasterSwitch, { config, onChanged: load }) : null,
 						h("button", { type: "button", className: "dse-btn", onClick: load, disabled: view.status === "loading" }, "刷新"))),
 				view.status === "loading" ? h("p", { className: "dse-status" }, "加载中…") : null,
 				view.status === "error" ? h("div", { className: "dse-failure" },
 					h("p", {}, "无法读取进化技能：" + view.message),
 					h("button", { type: "button", className: "dse-btn", onClick: load }, "重试")) : null,
 				data ? h(React.Fragment, null,
-					h("div", { className: "dse-chips" },
-						h("span", { className: "dse-chip", "data-kind": config.autoRegister ? "on" : "off" },
-							config.autoRegister ? "自动注册：开" : "自动注册：关"),
-						config.signals && config.signals.complex ? h("span", { className: "dse-chip" }, "信号：复杂任务 ≥" + config.minToolCalls + " 次调用") : null,
-						config.signals && config.signals.recovered ? h("span", { className: "dse-chip" }, "信号：从错误中恢复") : null,
-						config.signals && config.signals.repeated ? h("span", { className: "dse-chip" }, "信号：序列重复 ≥" + config.minPatternOccurrences + " 次") : null,
-						config.complexRequiresCorroboration ? h("span", { className: "dse-chip" }, "闸门：单独 complex 需佐证才送审") : null,
-						h("span", { className: "dse-chip" }, "LLM：" + config.llmProvider + " / " + config.llmModel + (config.modelSource === "runtime" ? "（界面设置）" : "")),
-						h("span", { className: "dse-chip" }, "生成语言：" + (config.skillLanguage === "zh" ? "中文" : "English")),
-						h("span", { className: "dse-chip" }, "容量：" + skills.length + "/" + config.maxEvolvedSkills)),
-					h(ModelConfig, { config, onChanged: load }),
-					h(TuningPanel, { config, onChanged: load }),
-					h(PromptsPanel, { config, onChanged: load }),
-					h(PatternList, { stats, config }),
-					h("div", { className: "dse-catalog" },
-						h("div", { className: "dse-catalogHeading" },
-							h("h4", {}, "已生成的技能"),
-							h("span", {}, String(skills.length))),
-						skills.length === 0
-							? h("div", { className: "dse-empty" },
-								h("div", {}, h("b", {}, "还没有进化技能")),
-								h("div", {}, "每个成功回合结束时，插件按 Hermes 模型检测信号：复杂任务（≥" + config.minToolCalls + " 次工具调用）、"),
-								h("div", {}, "从错误中恢复、或同一序列重复 ≥" + config.minPatternOccurrences + " 次。任一信号触发 LLM 评审，"),
-								h("div", {}, "值得复用的工作流会被提炼为技能并注册；后续同类执行还会把新经验合并进已有技能（版本递增）。"),
-								h("div", {}, "评审统计在本进程内存中进行，服务重启后重新累计；已生成的技能会持久保存。"))
-							: skills.map((summary) => h(SkillCard, { key: summary.name, summary, onRemoved: handleRemoved })),
-						skills.length > 0 ? h("div", { className: "dse-cardActions" },
-							h("button", {
-								type: "button",
-								className: "dse-btn",
-								"data-danger": true,
-								disabled: busy,
-								onClick: askClear
-							}, busy ? "清空中…" : confirmClear ? "再次点击确认清空全部" : "清空全部（" + skills.length + "）")) : null)) : null);
+					h("div", { className: "dse-tabs" },
+						h("button", { type: "button", className: "dse-tab", "data-active": tab === "skills", onClick: () => setTab("skills") }, "技能（" + skills.length + "）"),
+						h("button", { type: "button", className: "dse-tab", "data-active": tab === "settings", onClick: () => setTab("settings") }, "设置")),
+					tab === "skills" ? h(React.Fragment, null,
+						config.enabled ? null : h("p", { className: "dse-status" }, "插件当前已停用：新的回合不会被观察和结晶；已有技能保持可用。可在右上角总开关重新启用。"),
+						h("div", { className: "dse-catalog" },
+							h("div", { className: "dse-catalogHeading" },
+								h("h4", {}, "已生成的技能"),
+								h("span", {}, String(skills.length))),
+							skills.length === 0
+								? h("div", { className: "dse-empty" },
+									h("div", {}, h("b", {}, "还没有进化技能")),
+									h("div", {}, "每个成功回合结束时，插件按 Hermes 模型检测信号：复杂任务（≥" + config.minToolCalls + " 次工具调用）、"),
+									h("div", {}, "从错误中恢复、或同一序列重复 ≥" + config.minPatternOccurrences + " 次。任一信号触发 LLM 评审，"),
+									h("div", {}, "值得复用的工作流会被提炼为技能并注册；后续同类执行还会把新经验合并进已有技能（版本递增）。"),
+									h("div", {}, "评审统计在本进程内存中进行，服务重启后重新累计；已生成的技能会持久保存。"))
+								: skills.map((summary) => h(SkillCard, { key: summary.name, summary, onRemoved: handleRemoved })),
+							skills.length > 0 ? h("div", { className: "dse-cardActions" },
+								h("button", {
+									type: "button",
+									className: "dse-btn",
+									"data-danger": true,
+									disabled: busy,
+									onClick: askClear
+								}, busy ? "清空中…" : confirmClear ? "再次点击确认清空全部" : "清空全部（" + skills.length + "）")) : null))
+						: h(React.Fragment, null,
+							h("div", { className: "dse-chips" },
+								h("span", { className: "dse-chip", "data-kind": config.enabled ? "on" : "off" },
+									config.enabled ? "插件：运行中" : "插件：已停用"),
+								h("span", { className: "dse-chip", "data-kind": config.autoRegister ? "on" : "off" },
+									config.autoRegister ? "自动注册：开" : "自动注册：关"),
+								config.signals && config.signals.complex ? h("span", { className: "dse-chip" }, "信号：复杂任务 ≥" + config.minToolCalls + " 次调用") : null,
+								config.signals && config.signals.recovered ? h("span", { className: "dse-chip" }, "信号：从错误中恢复") : null,
+								config.signals && config.signals.repeated ? h("span", { className: "dse-chip" }, "信号：序列重复 ≥" + config.minPatternOccurrences + " 次") : null,
+								config.complexRequiresCorroboration ? h("span", { className: "dse-chip" }, "闸门：单独 complex 需佐证才送审") : null,
+								h("span", { className: "dse-chip" }, "LLM：" + config.llmProvider + " / " + config.llmModel + (config.modelSource === "runtime" ? "（界面设置）" : "")),
+								h("span", { className: "dse-chip" }, "生成语言：" + (config.skillLanguage === "zh" ? "中文" : "English")),
+								h("span", { className: "dse-chip" }, "容量：" + skills.length + "/" + config.maxEvolvedSkills)),
+							h(ModelConfig, { config, onChanged: load }),
+							h(TuningPanel, { config, onChanged: load }),
+							h(PromptsPanel, { config, onChanged: load }),
+							h(PatternList, { stats, config }))) : null);
 		}
 
 		const inject = ["slots"];

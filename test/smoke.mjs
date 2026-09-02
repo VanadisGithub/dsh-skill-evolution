@@ -112,6 +112,12 @@ assert(list.value.skills[0].signals.length >= 1, 'skill record carries crystalli
 const got = await ctx._rpc('get', { args: { name: 'smoke-test-workflow' } })
 assert(got.ok && got.value.content.includes('## Verification'), 'RPC get returns full SKILL.md content')
 
+// --- skill invocation counting through the host `skill` tool -------------
+emit('tool/call', { callId: 'sk1', name: 'skill', arguments: JSON.stringify({ name: 'smoke-test-workflow' }) })
+await new Promise((r) => setTimeout(r, 50))
+const counted = await ctx._rpc('list', { args: {} })
+assert(counted.value.skills[0].invocations === 1, 'loading the skill through the skill tool counts an invocation')
+
 // --- turn 2: failed turn must never be reviewed -----------------------
 llmCalls = 0
 emit('user/message', { content: [{ type: 'text', text: 'failing task' }] })
@@ -295,6 +301,62 @@ assert(!readdirSync(GENERATED_DIR).includes('smoke-test-workflow.json'), 'remove
     assert(reset.ok && reset.value.config.minToolCalls === 5 && reset.value.config.signals.repeated === true,
       'resetTuning restores the mount-config baseline')
     assert(!existsSync(RUNTIME_CONFIG_FILE), 'runtime-config.json is removed when no override remains')
+  } finally {
+    if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+  }
+}
+
+// --- master switch ---------------------------------------------------------
+{
+  if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+  try {
+    let swLlmCalls = 0
+    const swCtx = {
+      logger: { info: () => {}, warn: (m) => console.error(`[plugin warn] ${m}`) },
+      skills: { register: () => () => {} },
+      llm: { async *stream() { swLlmCalls++; yield { type: 'text-delta', text: 'NOTHING_TO_SAVE' }; yield { type: 'finish', reason: { kind: 'completed' } } } },
+      connection: { rpc: { handle(_c, handler) { swCtx._rpc = handler } } },
+      _handlers: {},
+      on(event, fn) { swCtx._handlers[event] = fn },
+    }
+    apply(swCtx, { llmProvider: 'mock', llmModel: 'mock' })
+    const swSession = { id: 'switch-session' }
+    const swEmit = (type, data) => swCtx._handlers['session/event'](swSession, { type, data })
+    const swReplay = () => {
+      swEmit('user/message', { content: [{ type: 'text', text: 'switch test' }] })
+      for (let i = 0; i < 6; i++) {
+        const fail = i === 0
+        swEmit('tool/call', { callId: `s${i}`, name: 'bash', arguments: '{}' })
+        swEmit('tool/result', {
+          callId: `s${i}`,
+          error: fail ? { message: 'boom' } : undefined,
+          message: { source: { callId: `s${i}` }, content: [{ content: [{ type: 'text', text: fail ? 'exit 1' : 'ok' }] }] },
+        })
+      }
+      swEmit('turn/end', { reason: { kind: 'completed' } })
+    }
+
+    swReplay()
+    await new Promise((r) => setTimeout(r, 200))
+    assert(swLlmCalls === 1, 'enabled plugin reviews a corroborated turn')
+
+    const off = await swCtx._rpc('setEnabled', { args: { enabled: false } })
+    assert(off.ok && off.value.enabled === false, 'setEnabled(false) pauses observation')
+    swReplay()
+    await new Promise((r) => setTimeout(r, 200))
+    assert(swLlmCalls === 1, 'disabled plugin ignores turns entirely')
+    const persistedOff = existsSync(RUNTIME_CONFIG_FILE) ? JSON.parse(readFileSync(RUNTIME_CONFIG_FILE, 'utf8')) : {}
+    assert(persistedOff.enabled === false, 'the paused state is persisted')
+
+    const badEnabled = await swCtx._rpc('setEnabled', { args: { enabled: 'yes' } })
+    assert(!badEnabled.ok && badEnabled.error.code === 'skill-evolution/bad-enabled', 'setEnabled rejects non-boolean values')
+
+    const on = await swCtx._rpc('setEnabled', { args: { enabled: true } })
+    assert(on.ok && on.value.enabled === true, 'setEnabled(true) resumes observation')
+    swReplay()
+    await new Promise((r) => setTimeout(r, 200))
+    assert(swLlmCalls === 2, 'resumed plugin reviews again')
+    assert(!existsSync(RUNTIME_CONFIG_FILE), 'resuming to the config default drops the override file')
   } finally {
     if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
   }
