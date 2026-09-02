@@ -2,3 +2,4 @@ node_modules/
 generated/
 *.tmp
 .DS_Store
+runtime-config.json

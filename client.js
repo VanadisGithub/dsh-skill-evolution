@@ -55,6 +55,19 @@ window.__ModuleLoader__.load({
 .dse-empty b{color:var(--dsw-alias-label-secondary)}
 .dse-status{color:var(--dsw-alias-label-tertiary);font-size:12.5px;line-height:20px}
 .dse-failure{color:var(--dsw-alias-state-error-primary);align-items:center;gap:10px;display:flex;font-size:12.5px}
+.dse-modelConfig{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:10px;flex-direction:column;gap:10px;padding:10px 14px;display:flex}
+.dse-modelTitle{color:var(--dsw-alias-label-secondary);font-size:12.5px;font-weight:500}
+.dse-modelRow{align-items:flex-end;gap:10px;flex-wrap:wrap;display:flex}
+.dse-modelField{flex-direction:column;gap:4px;min-width:180px;flex:1;display:flex}
+.dse-modelField>span{color:var(--dsw-alias-label-tertiary);font-size:11px}
+.dse-input,.dse-select{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);height:30px;font:inherit;font-size:13px;border-radius:6px;padding:0 8px;width:100%}
+.dse-input:focus,.dse-select:focus{border-color:var(--dsw-alias-brand-primary);outline:none}
+.dse-modelActions{align-items:center;gap:8px;flex-wrap:wrap;display:flex}
+.dse-btn[data-primary=true]{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);border-color:transparent}
+.dse-btn[data-primary=true]:disabled{opacity:.45;cursor:default}
+.dse-btn:disabled{opacity:.45;cursor:default}
+.dse-modelSaved{color:var(--dsw-alias-state-success-primary);margin:0;font-size:12px}
+.dse-modelHint{color:var(--dsw-alias-label-tertiary);font-size:11px}
 .dse-patterns{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:10px;flex-direction:column;gap:8px;padding:10px 14px;display:flex}
 .dse-patterns summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12.5px;user-select:none}
 .dse-patternRow{align-items:center;gap:8px;flex-wrap:wrap;display:flex;font-size:11.5px;color:var(--dsw-alias-label-tertiary)}
@@ -208,6 +221,70 @@ window.__ModuleLoader__.load({
 						: h("span", { className: "dse-chip", "data-kind": p.occurrences >= (config ? config.minPatternOccurrences : 3) ? "hot" : undefined }, "观察中"))));
 		}
 
+		function ModelConfig({ config, onChanged }) {
+			const [provider, setProvider] = useState(config.llmProvider || "");
+			const [model, setModel] = useState(config.llmModel || "");
+			const [catalog, setCatalog] = useState(undefined);
+			const [busy, setBusy] = useState(false);
+			const [message, setMessage] = useState(undefined);
+			const overridden = config.modelSource === "runtime";
+
+			useEffect(() => {
+				let cancelled = false;
+				rpc("listModels")
+					.then((data) => { if (!cancelled) setCatalog(data); })
+					.catch(() => { if (!cancelled) setCatalog({ providers: [], modelsByProvider: {} }); });
+				return () => { cancelled = true; };
+			}, []);
+
+			const providers = catalog && Array.isArray(catalog.providers) ? catalog.providers : [];
+			const modelOptions = catalog && catalog.modelsByProvider ? (catalog.modelsByProvider[provider] || []) : [];
+			const dirty = provider !== (config.llmProvider || "") || model !== (config.llmModel || "");
+
+			const save = useCallback(() => {
+				if (!provider.trim() || !model.trim()) {
+					setMessage({ ok: false, text: "Provider 和 Model 不能为空" });
+					return;
+				}
+				setBusy(true);
+				setMessage(undefined);
+				rpc("setModel", { provider: provider.trim(), model: model.trim() })
+					.then(() => { setBusy(false); setMessage({ ok: true, text: "已保存，评审立即生效并持久化" }); onChanged(); })
+					.catch((e) => { setBusy(false); setMessage({ ok: false, text: String(e.message || e) }); });
+			}, [provider, model, onChanged]);
+
+			const reset = useCallback(() => {
+				setBusy(true);
+				setMessage(undefined);
+				rpc("resetModel")
+					.then((v) => { setBusy(false); setProvider(v.llmProvider); setModel(v.llmModel); setMessage({ ok: true, text: "已恢复为挂载配置的默认值" }); onChanged(); })
+					.catch((e) => { setBusy(false); setMessage({ ok: false, text: String(e.message || e) }); });
+			}, [onChanged]);
+
+			return h("div", { className: "dse-modelConfig" },
+				h("div", { className: "dse-modelTitle" }, "评审模型（结晶与改进评审使用的 LLM）"),
+				h("div", { className: "dse-modelRow" },
+					h("label", { className: "dse-modelField" },
+						h("span", {}, "Provider"),
+						providers.length > 0
+							? h("select", { className: "dse-select", value: provider, onChange: (e) => setProvider(e.target.value) },
+								providers.some((p) => p.id === provider) ? null : h("option", { value: provider }, provider),
+								providers.map((p) => h("option", { key: p.id, value: p.id }, p.name && p.name !== p.id ? p.name + " (" + p.id + ")" : p.id)))
+							: h("input", { className: "dse-input", value: provider, onChange: (e) => setProvider(e.target.value), placeholder: "provider id" })),
+					h("label", { className: "dse-modelField" },
+						h("span", {}, "Model"),
+						h("input", { className: "dse-input", list: "dse-model-options", value: model, onChange: (e) => setModel(e.target.value), placeholder: "model id" }),
+						h("datalist", { id: "dse-model-options" }, modelOptions.map((m) => h("option", { key: m.id, value: m.id })))),
+					h("div", { className: "dse-modelActions" },
+						h("button", { type: "button", className: "dse-btn", "data-primary": true, disabled: busy || !dirty, onClick: save }, busy ? "保存中…" : "保存"),
+						overridden ? h("button", { type: "button", className: "dse-btn", disabled: busy, onClick: reset }, "恢复默认") : null)),
+				message
+					? h("p", { className: message.ok ? "dse-modelSaved" : "dse-failure" }, message.text)
+					: overridden
+						? h("p", { className: "dse-modelHint" }, "当前值来自本界面设置（持久化于 runtime-config.json，优先于挂载配置）")
+						: h("p", { className: "dse-modelHint" }, "当前值来自挂载配置；在此保存后将持久化覆盖，重启后仍生效"));
+		}
+
 		function SkillEvolutionSection() {
 			const [view, setView] = useState({ status: "loading" });
 			const [confirmClear, setConfirmClear] = useState(false);
@@ -271,8 +348,9 @@ window.__ModuleLoader__.load({
 						config.signals && config.signals.complex ? h("span", { className: "dse-chip" }, "信号：复杂任务 ≥" + config.minToolCalls + " 次调用") : null,
 						config.signals && config.signals.recovered ? h("span", { className: "dse-chip" }, "信号：从错误中恢复") : null,
 						config.signals && config.signals.repeated ? h("span", { className: "dse-chip" }, "信号：序列重复 ≥" + config.minPatternOccurrences + " 次") : null,
-						h("span", { className: "dse-chip" }, "LLM：" + config.llmProvider + " / " + config.llmModel),
+						h("span", { className: "dse-chip" }, "LLM：" + config.llmProvider + " / " + config.llmModel + (config.modelSource === "runtime" ? "（界面设置）" : "")),
 						h("span", { className: "dse-chip" }, "容量：" + skills.length + "/" + config.maxEvolvedSkills)),
+					h(ModelConfig, { config, onChanged: load }),
 					h(PatternList, { stats, config }),
 					h("div", { className: "dse-catalog" },
 						h("div", { className: "dse-catalogHeading" },

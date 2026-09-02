@@ -93,17 +93,33 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 | `minSuccessRate` | `0.7` | `repeated` 信号成功率下限 |
 | `signals` | 全开 | `{complex, recovered, repeated}` 分别开关 |
 | `autoRegister` | `true` | 结晶后自动注册进技能目录 |
-| `llmProvider` / `llmModel` | `deepseek` / `deepseek-chat` | 评审用的模型（必须是部署中存在的 provider） |
+| `llmProvider` / `llmModel` | `deepseek` / `deepseek-chat` | 评审用的模型（必须是部署中存在的 provider）。**也可直接在设置面板里修改**，见下方说明 |
 | `maxEvolvedSkills` | `20` | 进化技能容量上限 |
 | `improvementEvery` | `3` | 每 N 次同序列重跑触发一次改进评审 |
 | `maxImprovementsPerProcess` | `5` | 每进程每技能改进次数上限 |
 | `maxEvidenceSteps` | `30` | 送评审的最大步骤数 |
+
+### 在 UI 里改评审模型
+
+设置 → 技能进化 面板内置**评审模型**编辑器：Provider 下拉列出本部署所有已注册的 LLM provider（来自 `ctx.llm.listProviders()`），Model 输入框带各 provider 模型目录的自动补全。保存后立即生效，并持久化到插件目录的 `runtime-config.json`（优先于挂载配置，重启后仍生效）；「恢复默认」按钮删除该文件、回落到挂载配置的 `llmProvider`/`llmModel`。
+
+不想用 UI 也可以走配置层：在 `~/.dsh/profiles/<profile>/cordis.patch.yml`（或 `~/.dsh/cordis.patch.yml`）追加一条覆盖行——不带 `insert`、按 `id` 命中已挂载条目：
+
+```yaml
+- id: 'skill-evolution'
+  config:
+    llmProvider: <your-provider>
+    llmModel: <your-model>
+```
+
+注意 `config` 是**整体替换**而非合并，需要保留的键请一并写全。
 
 ## 管理面板
 
 设置 → **技能进化**：
 
 - 配置与信号开关一览、实时模式统计（各序列出现次数/成功率/是否结晶）
+- **评审模型编辑器**：改 provider/model、保存持久化、一键恢复默认
 - 技能卡片：结晶信号、工具序列、版本与改进次数；展开查看完整 SKILL.md
 - 单个删除 / 清空全部（均为两步确认）；删除会同时反注册并删除磁盘文件
 

@@ -51,6 +51,7 @@ const DEFAULT_MAX_IMPROVEMENTS_PER_PROCESS = 5
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const GENERATED_DIR = join(PLUGIN_DIR, 'generated')
+const RUNTIME_CONFIG_FILE = join(PLUGIN_DIR, 'runtime-config.json')
 const RPC_CHANNEL = '/skill-evolution'
 
 export const name = 'skill-evolution'
@@ -91,8 +92,11 @@ export function apply(ctx, config = {}) {
     repeated: signalsConfig.repeated ?? true,
   }
   const autoRegister = config.autoRegister ?? true
-  const llmProvider = config.llmProvider ?? 'deepseek'
-  const llmModel = config.llmModel ?? 'deepseek-chat'
+  // Reviewer model: patch-config baseline, overridable at runtime from the
+  // Settings UI (persisted in runtime-config.json, reloaded on next apply).
+  let llmProvider = config.llmProvider ?? 'deepseek'
+  let llmModel = config.llmModel ?? 'deepseek-chat'
+  let modelSource = 'config'
 
   /** @type {Map<string, {sessionId: string, startedAt: string, steps: Array, callIdToTool: Map, intent: string}>} */
   const activeTraces = new Map()
@@ -145,6 +149,33 @@ export function apply(ctx, config = {}) {
       if (existsSync(fileOf(skillName))) unlinkSync(fileOf(skillName))
     } catch (error) {
       ctx.logger.warn(`skill-evolution: failed to delete file for "${skillName}": ${String(error)}`)
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Runtime model config (Settings-UI editable, survives restarts)
+  // ------------------------------------------------------------------
+
+  function loadRuntimeConfig() {
+    try {
+      if (!existsSync(RUNTIME_CONFIG_FILE)) return
+      const rec = safeRecord(JSON.parse(readFileSync(RUNTIME_CONFIG_FILE, 'utf8')))
+      if (!rec) return
+      if (typeof rec.llmProvider === 'string' && rec.llmProvider.trim()) llmProvider = rec.llmProvider.trim()
+      if (typeof rec.llmModel === 'string' && rec.llmModel.trim()) llmModel = rec.llmModel.trim()
+      modelSource = 'runtime'
+    } catch (error) {
+      ctx.logger.warn(`skill-evolution: ignoring unreadable runtime-config.json: ${String(error)}`)
+    }
+  }
+
+  function persistRuntimeConfig() {
+    try {
+      const tmp = `${RUNTIME_CONFIG_FILE}.tmp`
+      writeFileSync(tmp, JSON.stringify({ llmProvider, llmModel }, null, 2))
+      renameSync(tmp, RUNTIME_CONFIG_FILE)
+    } catch (error) {
+      ctx.logger.warn(`skill-evolution: failed to persist runtime model config: ${String(error)}`)
     }
   }
 
@@ -622,10 +653,15 @@ export function apply(ctx, config = {}) {
       signals: { ...signalEnabled },
       llmProvider,
       llmModel,
+      modelSource,
+      configDefaults: {
+        llmProvider: config.llmProvider ?? 'deepseek',
+        llmModel: config.llmModel ?? 'deepseek-chat',
+      },
     }
   }
 
-  function handleRpc(endpoint, payload) {
+  async function handleRpc(endpoint, payload, signal) {
     const args = safeRecord(payload?.args) ?? {}
     switch (endpoint) {
       case 'list':
@@ -634,6 +670,58 @@ export function apply(ctx, config = {}) {
           config: configSnapshot(),
           stats: statsSnapshot(),
         })
+      case 'listModels': {
+        let providers = []
+        try {
+          providers = typeof ctx.llm.listProviders === 'function' ? ctx.llm.listProviders() : []
+        } catch (error) {
+          ctx.logger.warn(`skill-evolution: listProviders threw: ${String(error)}`)
+        }
+        const modelsByProvider = {}
+        await Promise.all(providers.map(async (p) => {
+          if (typeof p?.id !== 'string') return
+          try {
+            const models = typeof ctx.llm.listModels === 'function' ? await ctx.llm.listModels(p.id, signal) : []
+            modelsByProvider[p.id] = Array.isArray(models) ? models.filter(m => typeof m?.id === 'string').map(m => ({ id: m.id, name: m.name ?? m.id })) : []
+          } catch (error) {
+            ctx.logger.warn(`skill-evolution: listModels(${p.id}) threw: ${String(error)}`)
+            modelsByProvider[p.id] = []
+          }
+        }))
+        return ok({ providers: providers.filter(p => typeof p?.id === 'string').map(p => ({ id: p.id, name: p.name ?? p.id })), modelsByProvider })
+      }
+      case 'setModel': {
+        const provider = typeof args.provider === 'string' ? args.provider.trim() : ''
+        const model = typeof args.model === 'string' ? args.model.trim() : ''
+        if (!provider) return fail('skill-evolution/bad-provider', 'provider must be a non-empty string')
+        if (!model) return fail('skill-evolution/bad-model', 'model must be a non-empty string')
+        let known = null
+        try {
+          known = typeof ctx.llm.listProviders === 'function' ? ctx.llm.listProviders() : null
+        } catch {
+          known = null
+        }
+        if (Array.isArray(known) && known.length > 0 && !known.some(p => p?.id === provider)) {
+          return fail('skill-evolution/unknown-provider', `provider ${JSON.stringify(provider)} is not registered in this deployment`)
+        }
+        llmProvider = provider
+        llmModel = model
+        modelSource = 'runtime'
+        persistRuntimeConfig()
+        ctx.logger.info(`skill-evolution: reviewer model set to ${llmProvider}/${llmModel} (persisted)`)
+        return ok({ llmProvider, llmModel, modelSource })
+      }
+      case 'resetModel': {
+        llmProvider = config.llmProvider ?? 'deepseek'
+        llmModel = config.llmModel ?? 'deepseek-chat'
+        modelSource = 'config'
+        try {
+          if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+        } catch (error) {
+          ctx.logger.warn(`skill-evolution: failed to remove runtime-config.json: ${String(error)}`)
+        }
+        return ok({ llmProvider, llmModel, modelSource })
+      }
       case 'get': {
         if (typeof args.name !== 'string' || !SKILL_NAME_RE.test(args.name)) return fail('skill-evolution/bad-name', 'invalid skill name')
         const entry = evolvedSkills.get(args.name)
@@ -680,15 +768,20 @@ export function apply(ctx, config = {}) {
   // Activation
   // ------------------------------------------------------------------
 
+  loadRuntimeConfig()
+  if (modelSource === 'runtime') {
+    ctx.logger.info(`skill-evolution: reviewer model from runtime-config.json: ${llmProvider}/${llmModel}`)
+  }
+
   loadPersisted()
   for (const entry of evolvedSkills.values()) registerSkill(entry.record)
   if (evolvedSkills.size > 0) {
     ctx.logger.info(`skill-evolution: restored ${evolvedSkills.size} persisted evolved skill(s)`)
   }
 
-  ctx.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload, _signal) => {
+  ctx.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload, signal) => {
     try {
-      return handleRpc(endpoint, payload)
+      return handleRpc(endpoint, payload, signal)
     } catch (error) {
       ctx.logger.warn(`skill-evolution: RPC ${endpoint} threw: ${String(error)}`)
       return fail('skill-evolution/internal', String(error))
