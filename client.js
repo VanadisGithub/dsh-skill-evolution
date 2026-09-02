@@ -225,10 +225,14 @@ window.__ModuleLoader__.load({
 			const [provider, setProvider] = useState(config.llmProvider || "");
 			const [model, setModel] = useState(config.llmModel || "");
 			const [manualModel, setManualModel] = useState(false);
+			const [lang, setLang] = useState(config.skillLanguage || "en");
 			const [catalog, setCatalog] = useState(undefined);
 			const [busy, setBusy] = useState(false);
 			const [message, setMessage] = useState(undefined);
 			const overridden = config.modelSource === "runtime";
+
+			// Keep the selector aligned with the server truth after reloads.
+			useEffect(() => { setLang(config.skillLanguage || "en"); }, [config.skillLanguage]);
 
 			useEffect(() => {
 				let cancelled = false;
@@ -266,6 +270,17 @@ window.__ModuleLoader__.load({
 				setModel(value);
 			}, []);
 
+			// Language applies immediately and persists server-side; revert the
+			// selector if the RPC rejects.
+			const onLanguageChange = useCallback((next) => {
+				setLang(next);
+				setBusy(true);
+				setMessage(undefined);
+				rpc("setLanguage", { language: next })
+					.then(() => { setBusy(false); setMessage({ ok: true, text: "生成语言已设为" + (next === "zh" ? "中文" : "English") + "，下次评审即生效" }); onChanged(); })
+					.catch((e) => { setBusy(false); setLang(config.skillLanguage || "en"); setMessage({ ok: false, text: String(e.message || e) }); });
+			}, [config.skillLanguage, onChanged]);
+
 			const save = useCallback(() => {
 				if (!provider.trim() || !model.trim()) {
 					setMessage({ ok: false, text: "Provider 和 Model 不能为空" });
@@ -287,7 +302,7 @@ window.__ModuleLoader__.load({
 			}, [onChanged]);
 
 			return h("div", { className: "dse-modelConfig" },
-				h("div", { className: "dse-modelTitle" }, "评审模型（结晶与改进评审使用的 LLM）"),
+				h("div", { className: "dse-modelTitle" }, "评审模型与生成语言（结晶与改进评审使用的 LLM，及其输出语言）"),
 				h("div", { className: "dse-modelRow" },
 					h("label", { className: "dse-modelField" },
 						h("span", {}, "Provider"),
@@ -304,6 +319,11 @@ window.__ModuleLoader__.load({
 								modelOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name && m.name !== m.id ? m.name + " (" + m.id + ")" : m.id)),
 								h("option", { value: "__manual__" }, "手动输入 model id…"))
 							: h("input", { className: "dse-input", value: model, onChange: (e) => setModel(e.target.value), placeholder: "model id" })),
+					h("label", { className: "dse-modelField" },
+						h("span", {}, "生成语言"),
+						h("select", { className: "dse-select", value: lang, disabled: busy, onChange: (e) => onLanguageChange(e.target.value) },
+							h("option", { value: "zh" }, "中文"),
+							h("option", { value: "en" }, "English"))),
 					h("div", { className: "dse-modelActions" },
 						h("button", { type: "button", className: "dse-btn", "data-primary": true, disabled: busy || !dirty, onClick: save }, busy ? "保存中…" : "保存"),
 						manualModel && modelOptions.length > 0
@@ -382,6 +402,7 @@ window.__ModuleLoader__.load({
 						config.signals && config.signals.repeated ? h("span", { className: "dse-chip" }, "信号：序列重复 ≥" + config.minPatternOccurrences + " 次") : null,
 						config.complexRequiresCorroboration ? h("span", { className: "dse-chip" }, "闸门：单独 complex 需佐证才送审") : null,
 						h("span", { className: "dse-chip" }, "LLM：" + config.llmProvider + " / " + config.llmModel + (config.modelSource === "runtime" ? "（界面设置）" : "")),
+						h("span", { className: "dse-chip" }, "生成语言：" + (config.skillLanguage === "zh" ? "中文" : "English")),
 						h("span", { className: "dse-chip" }, "容量：" + skills.length + "/" + config.maxEvolvedSkills)),
 					h(ModelConfig, { config, onChanged: load }),
 					h(PatternList, { stats, config }),

@@ -53,6 +53,8 @@ const DEFAULT_MAX_EVIDENCE_STEPS = 30
 const DEFAULT_IMPROVEMENT_EVERY = 3
 const DEFAULT_MAX_IMPROVEMENTS_PER_PROCESS = 5
 const DEFAULT_COMPLEX_REQUIRES_CORROBORATION = true
+const DEFAULT_SKILL_LANGUAGE = 'en'
+const SKILL_LANGUAGES = ['zh', 'en']
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const GENERATED_DIR = join(PLUGIN_DIR, 'generated')
@@ -103,6 +105,10 @@ export function apply(ctx, config = {}) {
   let llmProvider = config.llmProvider ?? 'deepseek'
   let llmModel = config.llmModel ?? 'deepseek-chat'
   let modelSource = 'config'
+  // Generated-skill language: 'zh' or 'en'. Same runtime-override lifecycle
+  // as the reviewer model.
+  const configSkillLanguage = SKILL_LANGUAGES.includes(config.skillLanguage) ? config.skillLanguage : DEFAULT_SKILL_LANGUAGE
+  let skillLanguage = configSkillLanguage
 
   /** @type {Map<string, {sessionId: string, startedAt: string, steps: Array, callIdToTool: Map, intent: string}>} */
   const activeTraces = new Map()
@@ -167,9 +173,17 @@ export function apply(ctx, config = {}) {
       if (!existsSync(RUNTIME_CONFIG_FILE)) return
       const rec = safeRecord(JSON.parse(readFileSync(RUNTIME_CONFIG_FILE, 'utf8')))
       if (!rec) return
-      if (typeof rec.llmProvider === 'string' && rec.llmProvider.trim()) llmProvider = rec.llmProvider.trim()
-      if (typeof rec.llmModel === 'string' && rec.llmModel.trim()) llmModel = rec.llmModel.trim()
-      modelSource = 'runtime'
+      let modelFromRuntime = false
+      if (typeof rec.llmProvider === 'string' && rec.llmProvider.trim()) {
+        llmProvider = rec.llmProvider.trim()
+        modelFromRuntime = true
+      }
+      if (typeof rec.llmModel === 'string' && rec.llmModel.trim()) {
+        llmModel = rec.llmModel.trim()
+        modelFromRuntime = true
+      }
+      if (modelFromRuntime) modelSource = 'runtime'
+      if (SKILL_LANGUAGES.includes(rec.skillLanguage)) skillLanguage = rec.skillLanguage
     } catch (error) {
       ctx.logger.warn(`skill-evolution: ignoring unreadable runtime-config.json: ${String(error)}`)
     }
@@ -178,10 +192,24 @@ export function apply(ctx, config = {}) {
   function persistRuntimeConfig() {
     try {
       const tmp = `${RUNTIME_CONFIG_FILE}.tmp`
-      writeFileSync(tmp, JSON.stringify({ llmProvider, llmModel }, null, 2))
+      writeFileSync(tmp, JSON.stringify({ llmProvider, llmModel, skillLanguage }, null, 2))
       renameSync(tmp, RUNTIME_CONFIG_FILE)
     } catch (error) {
       ctx.logger.warn(`skill-evolution: failed to persist runtime model config: ${String(error)}`)
+    }
+  }
+
+  /**
+   * Write ONLY the skill-language override, so a model reset can drop the
+   * model keys without losing a language the user picked in the UI.
+   */
+  function persistRuntimeLanguageOnly() {
+    try {
+      const tmp = `${RUNTIME_CONFIG_FILE}.tmp`
+      writeFileSync(tmp, JSON.stringify({ skillLanguage }, null, 2))
+      renameSync(tmp, RUNTIME_CONFIG_FILE)
+    } catch (error) {
+      ctx.logger.warn(`skill-evolution: failed to persist runtime language config: ${String(error)}`)
     }
   }
 
@@ -442,6 +470,17 @@ export function apply(ctx, config = {}) {
     '<SKILL.md body with exactly these sections: # Title / ## When to Use / ## Procedure / ## Pitfalls / ## Verification>',
   ].join('\n')
 
+  /**
+   * Output-language directive appended to both review prompts. NAME and the
+   * section headings stay English (structural conventions); prose follows
+   * the user-selected language.
+   */
+  function languageDirective() {
+    return skillLanguage === 'zh'
+      ? 'Language: write DESCRIPTION and the entire SKILL.md body in Chinese (简体中文). NAME stays English kebab-case. Keep the section headings (# Title / ## When to Use / ## Procedure / ## Pitfalls / ## Verification) exactly as specified, in English.'
+      : 'Language: write DESCRIPTION and the entire SKILL.md body in English.'
+  }
+
   const IMPROVE_SYSTEM_PROMPT = [
     'You are improving an EXISTING evolved skill of an AI agent harness with fresh execution evidence (Hermes-style progressive improvement).',
     'Fold genuinely new lessons into the existing body — especially pitfalls recovered from in the new evidence.',
@@ -517,7 +556,7 @@ export function apply(ctx, config = {}) {
   async function reviewTraceForCrystallization(trace, pattern, signals, sequenceKey) {
     if (evolvedSkills.size >= maxEvolvedSkills) return
     const evidence = evidenceBlock(trace, pattern, signals)
-    const response = await callLlm(REVIEW_SYSTEM_PROMPT, evidence)
+    const response = await callLlm(`${REVIEW_SYSTEM_PROMPT}\n\n${languageDirective()}`, evidence)
     const review = parseReview(response)
     if (review.verdict !== 'save' || !review.content) {
       reviewedSequences.set(sequenceKey, { verdict: 'nothing', occurrencesAtReview: pattern.occurrences })
@@ -564,7 +603,7 @@ export function apply(ctx, config = {}) {
       'Existing skill content:',
       entry.record.content,
     ].join('\n')
-    const response = await callLlm(IMPROVE_SYSTEM_PROMPT, evidence)
+    const response = await callLlm(`${IMPROVE_SYSTEM_PROMPT}\n\n${languageDirective()}`, evidence)
     const review = parseReview(response)
     if (review.verdict !== 'update' || !review.content) {
       ctx.logger.info(`skill-evolution: no new learning folded into "${skillName}"`)
@@ -671,9 +710,11 @@ export function apply(ctx, config = {}) {
       llmProvider,
       llmModel,
       modelSource,
+      skillLanguage,
       configDefaults: {
         llmProvider: config.llmProvider ?? 'deepseek',
         llmModel: config.llmModel ?? 'deepseek-chat',
+        skillLanguage: configSkillLanguage,
       },
     }
   }
@@ -733,11 +774,28 @@ export function apply(ctx, config = {}) {
         llmModel = config.llmModel ?? 'deepseek-chat'
         modelSource = 'config'
         try {
-          if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+          // Keep a UI-picked language alive; only drop the file when nothing
+          // runtime-overridden remains.
+          if (skillLanguage !== configSkillLanguage) {
+            persistRuntimeLanguageOnly()
+          } else if (existsSync(RUNTIME_CONFIG_FILE)) {
+            unlinkSync(RUNTIME_CONFIG_FILE)
+          }
         } catch (error) {
           ctx.logger.warn(`skill-evolution: failed to remove runtime-config.json: ${String(error)}`)
         }
         return ok({ llmProvider, llmModel, modelSource })
+      }
+      case 'setLanguage': {
+        const language = typeof args.language === 'string' ? args.language.trim() : ''
+        if (!SKILL_LANGUAGES.includes(language)) return fail('skill-evolution/bad-language', `language must be one of ${SKILL_LANGUAGES.join(', ')}`)
+        skillLanguage = language
+        // Preserve an existing runtime model override; otherwise persist only
+        // the language so the model stays on the config baseline.
+        if (modelSource === 'runtime') persistRuntimeConfig()
+        else persistRuntimeLanguageOnly()
+        ctx.logger.info(`skill-evolution: generated-skill language set to ${skillLanguage} (persisted)`)
+        return ok({ skillLanguage })
       }
       case 'get': {
         if (typeof args.name !== 'string' || !SKILL_NAME_RE.test(args.name)) return fail('skill-evolution/bad-name', 'invalid skill name')

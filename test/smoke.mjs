@@ -10,12 +10,14 @@
  *
  * Run: node test/smoke.mjs
  */
-import { readdirSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { apply } from '../plugin.mjs'
 
-const GENERATED_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'generated')
+const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
+const GENERATED_DIR = join(PLUGIN_DIR, 'generated')
+const RUNTIME_CONFIG_FILE = join(PLUGIN_DIR, 'runtime-config.json')
 const assert = (cond, msg) => {
   if (!cond) {
     console.error(`FAIL: ${msg}`)
@@ -26,6 +28,7 @@ const assert = (cond, msg) => {
 
 const registered = new Map()
 let llmCalls = 0
+let lastSystemPrompt = ''
 const ctx = {
   logger: { info: () => {}, warn: (m) => console.error(`[plugin warn] ${m}`) },
   skills: {
@@ -35,8 +38,9 @@ const ctx = {
     },
   },
   llm: {
-    async *stream() {
+    async *stream(options) {
       llmCalls++
+      lastSystemPrompt = options && typeof options.system === 'string' ? options.system : ''
       yield {
         type: 'text-delta',
         text: [
@@ -97,6 +101,7 @@ emit('turn/end', { reason: { kind: 'completed' } })
 await new Promise((r) => setTimeout(r, 300))
 
 assert(llmCalls === 1, 'successful turn with signals triggers exactly one review')
+assert(/in English\./.test(lastSystemPrompt), 'default generated-skill language directive is English')
 assert(registered.has('smoke-test-workflow'), 'crystallized skill is registered into the catalog')
 assert(readdirSync(GENERATED_DIR).includes('smoke-test-workflow.json'), 'crystallized skill is persisted')
 
@@ -161,6 +166,56 @@ assert(!readdirSync(GENERATED_DIR).includes('smoke-test-workflow.json'), 'remove
   replayTurn(1) // same sequence, now with a recovered failure
   await new Promise((r) => setTimeout(r, 200))
   assert(gateLlmCalls === 1, 'gate on: corroborated (complex+recovered) turn reaches review')
+}
+
+// --- generated-skill language selection ----------------------------------
+{
+  // hermetic: drop any developer-local runtime config before and after
+  if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+  try {
+    let langLlmCalls = 0
+    let langSystem = ''
+    const langCtx = {
+      logger: { info: () => {}, warn: (m) => console.error(`[plugin warn] ${m}`) },
+      skills: { register: () => () => {} },
+      llm: { async *stream(options) { langLlmCalls++; langSystem = options?.system ?? ''; yield { type: 'text-delta', text: 'NOTHING_TO_SAVE' }; yield { type: 'finish', reason: { kind: 'completed' } } } },
+      connection: { rpc: { handle(_c, handler) { langCtx._rpc = handler } } },
+      _handlers: {},
+      on(event, fn) { langCtx._handlers[event] = fn },
+    }
+    apply(langCtx, { llmProvider: 'mock', llmModel: 'mock', skillLanguage: 'zh' })
+    const langSession = { id: 'lang-session' }
+    const langEmit = (type, data) => langCtx._handlers['session/event'](langSession, { type, data })
+    langEmit('user/message', { content: [{ type: 'text', text: 'language test' }] })
+    for (let i = 0; i < 6; i++) {
+      const fail = i === 0
+      langEmit('tool/call', { callId: `l${i}`, name: 'bash', arguments: '{}' })
+      langEmit('tool/result', {
+        callId: `l${i}`,
+        error: fail ? { message: 'boom' } : undefined,
+        message: { source: { callId: `l${i}` }, content: [{ content: [{ type: 'text', text: fail ? 'exit 1' : 'ok' }] }] },
+      })
+    }
+    langEmit('turn/end', { reason: { kind: 'completed' } })
+    await new Promise((r) => setTimeout(r, 200))
+    assert(langLlmCalls === 1 && langSystem.includes('简体中文'),
+      'skillLanguage zh injects the Chinese directive into the review prompt')
+
+    const bad = await langCtx._rpc('setLanguage', { args: { language: 'fr' } })
+    assert(!bad.ok && bad.error.code === 'skill-evolution/bad-language', 'RPC setLanguage rejects unknown languages')
+
+    const setZh = await langCtx._rpc('setLanguage', { args: { language: 'zh' } })
+    assert(setZh.ok && setZh.value.skillLanguage === 'zh', 'RPC setLanguage accepts zh')
+    const persisted = existsSync(RUNTIME_CONFIG_FILE) ? JSON.parse(readFileSync(RUNTIME_CONFIG_FILE, 'utf8')) : {}
+    assert(persisted.skillLanguage === 'zh' && !('llmProvider' in persisted),
+      'language-only persistence keeps the model on the config baseline')
+
+    const snapshot = await langCtx._rpc('list', { args: {} })
+    assert(snapshot.value.config.skillLanguage === 'zh' && snapshot.value.config.configDefaults.skillLanguage === 'zh',
+      'config snapshot exposes skillLanguage and its config default')
+  } finally {
+    if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+  }
 }
 
 console.log('\nsmoke test passed')

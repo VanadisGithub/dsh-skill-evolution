@@ -24,6 +24,7 @@
 #   signals: {complex, recovered, repeated}  toggle individual signals
 #   complexRequiresCorroboration  lone complex signal needs recovered/repeated
 #                                 corroboration before review (default true)
+#   skillLanguage           generated-skill prose language: zh or en (default en)
 - insert:
   - id: 'skill-evolution'
     name: 'dsh-skill-evolution'
