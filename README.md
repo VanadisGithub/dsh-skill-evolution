@@ -18,7 +18,7 @@ DeepSeek Harness（DSH）的 **Hermes 式技能自进化插件**：观察 agent 
 
 **单独 complex 闸门**（`complexRequiresCorroboration`，默认开）：`complex` 单独触发是弱证据（任何长回合都满足），默认必须叠加 `recovered` 或 `repeated` 佐证才送评审；被拦下的回合会在日志里记一条 withheld，等序列后续出现佐证信号时再送审。设为 `false` 恢复原"任一信号即送审"行为。
 
-**评审门禁**（Hermes background-review 模型）：评审 LLM 收到完整证据（信号、用户意图、工具序列、每步成败与摘要），决定 `SAVE` 或 `NOTHING_TO_SAVE`。硬性负面清单——以下内容**绝不结晶**：
+**评审门禁**（Hermes background-review 模型）：评审 LLM 收到完整证据（信号、用户意图、工具序列、每步成败与摘要）与**已有进化技能清单**，决定 `SAVE`、`FOLD_INTO` 或 `NOTHING_TO_SAVE`。硬性负面清单——以下内容**绝不结晶**：
 
 - 环境性失败（缺二进制、未配置凭证、未装包）
 - 对工具的负面断言（"X 工具坏了"会固化成长期拒绝）
@@ -26,6 +26,8 @@ DeepSeek Harness（DSH）的 **Hermes 式技能自进化插件**：观察 agent 
 - 一次性任务叙事、未解决的失败
 
 **渐进改进**（技能是活的）：当新证据落在已有进化技能的序列上（尤其是错误恢复经验），评审会把新教训合并进已有技能内容并版本 +1，而不是创建重复技能。
+
+**语义去重**（FOLD_INTO）：同一类经验可能经由**不同的工具序列**再次出现——纯序列匹配拦不住这种重复。因此结晶评审会把已有技能清单（名字+描述）一并交给评审 LLM；若判定新证据与某个已有技能属于同一工作流类别，评审输出 `VERDICT: FOLD_INTO: <已有技能名>`，宿主随即用本次证据走改进管道并入该技能（版本 +1），而不是新建近重复技能。目标技能不存在时按放弃处理并记日志。
 
 **产出格式**：类级命名的 kebab-case 技能，标准 SKILL.md 结构（`# Title / ## When to Use / ## Procedure / ## Pitfalls / ## Verification`）。
 

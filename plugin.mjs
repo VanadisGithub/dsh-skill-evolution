@@ -27,6 +27,10 @@
  *  - Skills are ALIVE: when new evidence lands on an existing evolved skill's
  *    sequence (especially recovered errors), the reviewer merges it into the
  *    existing body and bumps the version instead of creating a duplicate.
+ *  - Semantic dedup: the crystallization reviewer also sees the existing skill
+ *    list and may answer "VERDICT: FOLD_INTO: <name>" for a near-duplicate
+ *    workflow reached through a DIFFERENT tool sequence; the host then runs
+ *    the improvement pipeline against that skill instead of saving a copy.
  *
  * Management surface: evolved skills persist in `./generated/` beside this
  * file and are exposed over the authenticated `/skill-evolution` RPC channel
@@ -614,9 +618,15 @@ export function apply(ctx, config = {}) {
     'Naming: class-level kebab-case, 2-5 words. NOT a session artifact: no PR numbers, error strings, codenames, or fix-X/debug-Y names.',
     'If the name would only make sense for today\'s task, answer NOTHING_TO_SAVE.',
     '',
-    'Output EXACTLY one of these two forms, nothing else:',
+    'You also receive the list of existing evolved skills. If this evidence teaches the SAME class of workflow an existing skill already covers — even through a different tool sequence — do NOT save a near-duplicate: answer VERDICT: FOLD_INTO: <existing-skill-name> and the fresh evidence will be merged into that skill instead.',
+    '',
+    'Output EXACTLY one of these three forms, nothing else:',
     '',
     'NOTHING_TO_SAVE',
+    '',
+    'or:',
+    '',
+    'VERDICT: FOLD_INTO: <existing-skill-name>',
     '',
     'or:',
     '',
@@ -683,6 +693,13 @@ export function apply(ctx, config = {}) {
     if (typeof response !== 'string') return { verdict: 'nothing' }
     const trimmed = response.trim()
     if (/^NOTHING_TO_SAVE\b/i.test(trimmed)) return { verdict: 'nothing' }
+    // Semantic dedup: the reviewer routes a near-duplicate workflow into an
+    // existing skill instead of crystallizing a second one.
+    const foldMatch = trimmed.match(/^VERDICT:\s*FOLD_INTO:\s*(\S+)\s*$/im)
+    if (foldMatch) {
+      const target = foldMatch[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48)
+      return { verdict: 'fold', target }
+    }
     const saveMatch = trimmed.match(/^VERDICT:\s*SAVE\b/i)
     const updateMatch = trimmed.match(/^VERDICT:\s*UPDATE\b/i)
     if (!saveMatch && !updateMatch) return { verdict: 'nothing' }
@@ -720,9 +737,27 @@ export function apply(ctx, config = {}) {
 
   async function reviewTraceForCrystallization(trace, pattern, signals, sequenceKey) {
     if (evolvedSkills.size >= maxEvolvedSkills) return
-    const evidence = evidenceBlock(trace, pattern, signals)
+    // The reviewer sees every existing evolved skill so it can route a
+    // near-duplicate workflow into FOLD_INTO instead of saving a second copy.
+    const skillList = [...evolvedSkills.values()]
+      .map(entry => `- ${entry.record.name}: ${entry.record.description}`)
+      .join('\n')
+    const baseEvidence = evidenceBlock(trace, pattern, signals)
+    const evidence = skillList ? `Existing evolved skills:\n${skillList}\n\n${baseEvidence}` : baseEvidence
     const response = await callLlm(`${effectiveReviewPrompt()}\n\n${languageDirective()}`, evidence)
     const review = parseReview(response)
+    if (review.verdict === 'fold') {
+      if (!evolvedSkills.has(review.target)) {
+        reviewedSequences.set(sequenceKey, { verdict: 'nothing', occurrencesAtReview: pattern.occurrences })
+        ctx.logger.warn(`skill-evolution: reviewer folded into unknown skill "${review.target}"; nothing saved`)
+        return
+      }
+      sequenceToSkill.set(sequenceKey, review.target)
+      reviewedSequences.set(sequenceKey, { verdict: 'folded', occurrencesAtReview: pattern.occurrences })
+      ctx.logger.info(`skill-evolution: reviewer folded ${sequenceKey || 'trace'} into "${review.target}"`)
+      await reviewTraceForImprovement(trace, pattern, signals, sequenceKey, review.target)
+      return
+    }
     if (review.verdict !== 'save' || !review.content) {
       reviewedSequences.set(sequenceKey, { verdict: 'nothing', occurrencesAtReview: pattern.occurrences })
       ctx.logger.info(`skill-evolution: reviewer declined to crystallize ${sequenceKey || 'trace'}`)

@@ -362,4 +362,78 @@ assert(!readdirSync(GENERATED_DIR).includes('smoke-test-workflow.json'), 'remove
   }
 }
 
+// --- semantic dedup: FOLD_INTO routes near-duplicates into an existing skill
+{
+  if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+  try {
+    let foldLlmCalls = 0
+    const userContents = []
+    const foldResponses = [
+      // review 1 (sequence A): crystallize the first skill
+      ['VERDICT: SAVE', 'NAME: alpha-flow', 'DESCRIPTION: First workflow', '---', '# Alpha Flow', '', '## When to Use', 'Never.', '', '## Procedure', '1. Step.', '', '## Pitfalls', 'None.', '', '## Verification', 'Done.'].join('\n'),
+      // review 2 (sequence B, different tools): reviewer folds into alpha-flow
+      'VERDICT: FOLD_INTO: alpha-flow',
+      // review 3: the improvement pipeline merges the fresh evidence
+      ['VERDICT: UPDATE', '---', '# Alpha Flow', '', '## When to Use', 'Never.', '', '## Procedure', '1. Step.', '2. New step folded in.', '', '## Pitfalls', 'None.', '', '## Verification', 'Done.'].join('\n'),
+      // review 4 (sequence C): fold into a skill that does not exist
+      'VERDICT: FOLD_INTO: ghost-skill',
+    ]
+    const foldCtx = {
+      logger: { info: () => {}, warn: (m) => console.error(`[plugin warn] ${m}`) },
+      skills: { register: () => () => {} },
+      llm: {
+        async *stream(options) {
+          foldLlmCalls++
+          userContents.push(options?.messages?.[0]?.content?.[0]?.text ?? '')
+          yield { type: 'text-delta', text: foldResponses.shift() ?? 'NOTHING_TO_SAVE' }
+          yield { type: 'finish', reason: { kind: 'completed' } }
+        },
+      },
+      connection: { rpc: { handle(_c, handler) { foldCtx._rpc = handler } } },
+      _handlers: {},
+      on(event, fn) { foldCtx._handlers[event] = fn },
+    }
+    apply(foldCtx, { llmProvider: 'mock', llmModel: 'mock' })
+    const foldSession = { id: 'fold-session' }
+    const foldEmit = (type, data) => foldCtx._handlers['session/event'](foldSession, { type, data })
+    const foldReplay = (tools) => {
+      foldEmit('user/message', { content: [{ type: 'text', text: 'fold test' }] })
+      tools.forEach((tool, i) => {
+        const fail = i === 0
+        foldEmit('tool/call', { callId: `d${i}`, name: tool, arguments: '{}' })
+        foldEmit('tool/result', {
+          callId: `d${i}`,
+          error: fail ? { message: 'boom' } : undefined,
+          message: { source: { callId: `d${i}` }, content: [{ content: [{ type: 'text', text: fail ? 'exit 1' : 'ok' }] }] },
+        })
+      })
+      foldEmit('turn/end', { reason: { kind: 'completed' } })
+    }
+
+    foldReplay(['bash', 'read', 'bash', 'grep', 'edit', 'bash'])
+    await new Promise((r) => setTimeout(r, 300))
+    assert(foldLlmCalls === 1, 'sequence A crystallizes after one review')
+
+    foldReplay(['grep', 'edit', 'bash', 'read', 'bash', 'grep'])
+    await new Promise((r) => setTimeout(r, 400))
+    assert(foldLlmCalls === 3, 'FOLD_INTO triggers the improvement review instead of a save')
+    assert(/Existing evolved skills:[\s\S]*- alpha-flow/.test(userContents[1] ?? ''), 'the crystallization prompt lists existing skills for dedup')
+    const foldedList = await foldCtx._rpc('list', { args: {} })
+    assert(foldedList.value.skills.length === 1, 'no near-duplicate skill is created')
+    assert(foldedList.value.skills[0].version === 2, 'folded evidence bumps the existing skill to v2')
+    assert(foldedList.value.skills[0].improvements === 1, 'the fold counts as one improvement')
+
+    foldReplay(['edit', 'bash', 'grep', 'bash', 'read', 'edit'])
+    await new Promise((r) => setTimeout(r, 300))
+    assert(foldLlmCalls === 4, 'fold into an unknown skill is declined without saving')
+    const ghostList = await foldCtx._rpc('list', { args: {} })
+    assert(ghostList.value.skills.length === 1, 'unknown fold target creates nothing')
+
+    // cleanup: remove the crystallized skill so generated/ stays clean
+    await foldCtx._rpc('remove', { args: { name: 'alpha-flow' } })
+  } finally {
+    if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+  }
+}
+
 console.log('\nsmoke test passed')
