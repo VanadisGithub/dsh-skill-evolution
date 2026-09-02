@@ -159,13 +159,17 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 
 ## 截图 / Screenshots
 
-设置页「技能进化」总览——信号配置、实时模式统计与已结晶技能卡片：
+**技能** tab——技能卡片带价值（高/中/低）、版本、调用次数与更新时间标签，展开查看结晶信号、工具序列与完整 SKILL.md：
 
-![Settings section overview](assets/settings-overview.png)
+![Skills tab](assets/skills-tab.png)
 
-展开技能卡片——结晶信号、工具序列与完整 SKILL.md 内容：
+**设置** tab——状态一览、评审模型、生成语言与各配置面板：
 
-![Expanded skill card with crystallization signals](assets/skill-detail.png)
+![Settings tab](assets/settings-tab.png)
+
+**阈值与控制**——参数直接嵌在流程图里，在哪一步起作用就在哪一步改：
+
+![Tuning pipeline with embedded controls](assets/tuning-panel.png)
 
 宿主侧另暴露认证 RPC 通道 `/skill-evolution`：`list` / `get` / `remove` / `clear`。
 
