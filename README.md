@@ -3,93 +3,93 @@
 [![CI](https://github.com/VanadisGithub/dsh-skill-evolution/actions/workflows/ci.yml/badge.svg)](https://github.com/VanadisGithub/dsh-skill-evolution/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-[English](#english) | 中文
+English | [中文](./README.zh-CN.md)
 
-DeepSeek Harness（DSH）的**技能自进化插件**：观察 agent 执行轨迹，在每个成功回合结束时按信号触发 LLM 评审，把值得复用的工作流**结晶为技能**并注册进技能目录；后续同类执行还会把新经验合并进已有技能——技能是活的，越用越好。
+A **skill self-evolution plugin** for DeepSeek Harness (DSH): it watches agent execution traces and, at the end of every successful turn, fires an LLM review when signals trip — distilling workflows worth reusing into **crystallized skills** registered in the skill catalog. Later runs of the same workflow fold fresh lessons into the existing skill — skills are alive and get better with use.
 
-## 特性亮点
+## Highlights
 
-- **事件驱动结晶**：回合结束即评审，而非纯频率统计；三信号（复杂 / 恢复 / 重复）任一触发即送审
-- **严格的评审门禁**：LLM 评审 + 硬性负面清单，垃圾经验绝不入库；`NOTHING_TO_SAVE` 是一等结果
-- **技能持续进化**：同类新经验自动合并进已有技能（版本递增），语义去重（FOLD_INTO）拦截近重复
-- **全套设置页管理**：技能/设置双 tab、总开关、技能卡片（价值/版本/调用次数标签）、参数流程图内嵌调参、评审提示词就地编辑
-- **持久化与自治**：技能落盘 `generated/`、重启自动重注册；宿主半零第三方依赖（仅 `node:` 内建模块）
+- **Event-driven crystallization** — review fires at turn end, not on pure frequency counting; any of three signals (complex / recovered / repeated) sends the turn to review
+- **Strict review gate** — LLM reviewer plus a hard do-not-capture list keeps junk out; `NOTHING_TO_SAVE` is a first-class outcome
+- **Skills keep evolving** — new evidence is merged into existing skills (version bump); semantic dedup (`FOLD_INTO`) blocks near-duplicates reached through different tool sequences
+- **Full management UI in Settings** — tabbed skills/settings views, master switch, skill cards with value/version/invocation chips, a tuning pipeline diagram with controls embedded in-place, and editable review prompts
+- **Persistent & self-contained** — skills persist under `generated/` and re-register on restart; host half depends only on `node:` builtins
 
-## 截图
+## Screenshots
 
-**技能** tab——技能卡片带价值（高/中/低）、版本、调用次数与更新时间标签，展开查看结晶信号、工具序列与完整 SKILL.md：
+**Skills tab** — skill cards with value (high/medium/low), version, invocation count and update-time chips; expand for crystallization signals, tool sequence and the full SKILL.md:
 
 ![Skills tab](assets/skills-tab.png)
 
-**设置** tab——状态一览、评审模型、生成语言与各配置面板：
+**Settings tab** — status overview, review model, generation language and the configuration panels:
 
 ![Settings tab](assets/settings-tab.png)
 
-**阈值与控制**——参数直接嵌在流程图里，在哪一步起作用就在哪一步改：
+**Thresholds & controls** — every parameter embedded in the pipeline diagram, editable exactly where it takes effect:
 
 ![Tuning pipeline with embedded controls](assets/tuning-panel.png)
 
-## 工作原理
+## How it works
 
-### 信号检测
+### Signal detection
 
-每个回合结束（`turn/end`）时，对满足最小步数的成功轨迹检测三个信号：
+At every turn end (`turn/end`), successful traces meeting a minimum step count are checked against three signals:
 
-| 信号 | 条件 | 含义 |
+| Signal | Condition | Meaning |
 |---|---|---|
-| `complex` | 成功回合且工具调用 ≥ `minToolCalls`（默认 5） | 完成了一件复杂任务 |
-| `recovered` | 有失败步骤但回合最终成功 | 踩坑后找到了可行的绕行路径 |
-| `repeated` | 同一工具序列出现 ≥ `minPatternOccurrences` 次且成功率 ≥ `minSuccessRate` | 同一套操作反复出现且成熟可靠 |
+| `complex` | successful turn with ≥ `minToolCalls` tool calls (default 5) | completed a complex task |
+| `recovered` | had failed steps but the turn still succeeded | hit dead ends and found a working path around them |
+| `repeated` | same tool sequence recurred ≥ `minPatternOccurrences` times with success rate ≥ `minSuccessRate` | a recurring, proven workflow |
 
-**佐证闸门**（`complexRequiresCorroboration`，默认开）：单独的 `complex` 是弱证据（任何长回合都满足），默认必须叠加 `recovered` 或 `repeated` 才送评审；被拦下的回合记一条 withheld 日志，等序列后续出现佐证信号时再补送。
+**Corroboration gate** (`complexRequiresCorroboration`, on by default): a lone `complex` signal is weak evidence (any long turn qualifies), so by default it must be corroborated by `recovered` or `repeated` before review; withheld turns are logged and re-submitted once the sequence later earns a corroborating signal.
 
-### 评审门禁
+### Review gate
 
-评审 LLM 收到完整证据（信号、用户意图、工具序列、每步成败与摘要）与**已有进化技能清单**，输出三种结论之一：`SAVE`（结晶新技能）、`FOLD_INTO`（并入已有技能）、`NOTHING_TO_SAVE`（放弃）。
+The reviewer LLM receives full evidence (signals, user intent, tool sequence, per-step outcomes and summaries) plus the **existing evolved-skill list**, and answers one of: `SAVE` (crystallize a new skill), `FOLD_INTO` (merge into an existing skill), or `NOTHING_TO_SAVE`.
 
-硬性负面清单——以下内容**绝不结晶**：
+Hard do-not-capture list — the following is **never crystallized**:
 
-- 环境性失败（缺二进制、未配置凭证、未装包）
-- 对工具的负面断言（"X 工具坏了"会固化成长期拒绝）
-- 重试即愈的瞬时错误（教训是重试模式，不是原错误）
-- 一次性任务叙事、未解决的失败
+- environment-dependent failures (missing binaries, unconfigured credentials, uninstalled packages)
+- negative claims about tools ("tool X is broken" would freeze into a long-lived refusal)
+- transient errors cured by a retry (the lesson is the retry pattern, not the original error)
+- one-off task narratives, unresolved failures
 
-### 持续进化
+### Continuous evolution
 
-- **渐进改进**：新证据落在已有技能的序列上（尤其是错误恢复经验）时，评审把新教训合并进技能正文并版本 +1，而不是新建重复技能
-- **语义去重（FOLD_INTO）**：同一类经验可能经由**不同的工具序列**再次出现——纯序列匹配拦不住。结晶评审会看到已有技能清单（名字+描述），判定同属一个工作流类别时输出 `VERDICT: FOLD_INTO: <已有技能名>`，宿主随即走改进管道并入该技能
+- **Progressive improvement** — when new evidence lands on an existing skill's sequence (especially error-recovery experience), the reviewer merges the new lessons into the skill body and bumps the version instead of creating a duplicate
+- **Semantic dedup (`FOLD_INTO`)** — the same class of experience can reappear via a **different tool sequence**, which pure sequence matching cannot catch. The crystallization reviewer sees the existing skill list (name + description) and may answer `VERDICT: FOLD_INTO: <existing-skill-name>`; the host then runs the improvement pipeline against that skill
 
-### 产出格式
+### Output format
 
-类级命名的 kebab-case 技能，标准 SKILL.md 结构（`# Title / ## When to Use / ## Procedure / ## Pitfalls / ## Verification`）。NAME 与章节标题恒为英文，正文语言由 `skillLanguage` 决定。
+Class-level, kebab-case skills with the standard SKILL.md shape (`# Title / ## When to Use / ## Procedure / ## Pitfalls / ## Verification`). NAME and section headings are always English; body language follows `skillLanguage`.
 
-## 安装
+## Install
 
-### 方式一：官方 CLI（发布到 npm 后）
+### Option 1: official CLI (once published to npm)
 
 ```bash
 dsh plugin --profile web add dsh-skill-evolution
 ```
 
-包内 `dsh.bundle.patch` 会自动挂载，无需手改 profile 文件。
+The bundled `dsh.bundle.patch` mounts automatically — no profile edits needed.
 
-### 方式二：git clone + link
+### Option 2: git clone + link
 
 ```bash
 git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-skill-evolution
 ```
 
-在 `~/.dsh/profiles/web/package.json` 的 `dependencies` 中加入：
+Add to `dependencies` in `~/.dsh/profiles/web/package.json`:
 
 ```json
 "dsh-skill-evolution": "link:/Users/<you>/Code/dsh-skill-evolution"
 ```
 
-然后在 `~/.dsh/profiles/web` 执行 `pnpm install`，硬刷新浏览器。
+Then run `pnpm install` in `~/.dsh/profiles/web` and hard-refresh the browser.
 
-### 方式三：file:// 手动挂载（原型调试）
+### Option 3: file:// manual mount (prototype debugging)
 
-把仓库放到任意目录（如 `~/.dsh/plugins/skill-evolution/`），在 `~/.dsh/cordis.patch.yml` 追加：
+Place the repo anywhere (e.g. `~/.dsh/plugins/skill-evolution/`) and append to `~/.dsh/cordis.patch.yml`:
 
 ```yaml
 - insert:
@@ -99,82 +99,76 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
       minToolCalls: 5
       minPatternOccurrences: 3
       autoRegister: true
-      llmProvider: deepseek      # 按你的部署可用的 provider 修改
+      llmProvider: deepseek      # adjust to a provider available in your deployment
       llmModel: deepseek-chat
 ```
 
-`?v=N` 用于绕过 Node 模块缓存；改了 `plugin.mjs` 就 +1。宿主半改动需 loader 重放补丁，浏览器半改动硬刷新即可。
+`?v=N` busts the Node module cache; bump it whenever `plugin.mjs` changes. Host-half changes need a loader patch replay; browser-half changes just need a hard refresh.
 
-> ⚠️ 三种方式只能选一种，重复挂载会导致双实例。
+> ⚠️ Pick exactly one option — duplicate mounts cause a dual instance.
 
-## 配置
+## Configuration
 
-下表所有键都**既走挂载配置，也可在设置面板里直接修改**（面板改动持久化到插件目录 `runtime-config.json`，优先于挂载配置，重启后仍生效）：
+Every key below works **both via mount config and directly in the Settings panel** (panel edits persist to `runtime-config.json` in the plugin directory, overriding mount config across restarts):
 
-| 键 | 默认 | 说明 |
+| Key | Default | Description |
 |---|---|---|
-| `enabled` | `true` | 总开关：`false` 时不观察回合、不评审结晶（已有技能保持注册） |
-| `minTraceSteps` | `3` | 轨迹最小步数（噪音地板） |
-| `minToolCalls` | `5` | `complex` 信号阈值 |
-| `minPatternOccurrences` | `3` | `repeated` 信号阈值 |
-| `minSuccessRate` | `0.7` | `repeated` 信号成功率下限 |
-| `signals` | 全开 | `{complex, recovered, repeated}` 分别开关 |
-| `complexRequiresCorroboration` | `true` | 单独 `complex` 信号需叠加佐证才送评审 |
-| `autoRegister` | `true` | 结晶后自动注册进技能目录 |
-| `llmProvider` / `llmModel` | `deepseek` / `deepseek-chat` | 评审模型（provider 级联该 provider 的模型目录） |
-| `skillLanguage` | `en` | 生成技能的语言：`zh` / `en` |
-| `maxEvolvedSkills` | `20` | 进化技能容量上限 |
-| `improvementEvery` | `3` | 每 N 次同序列重跑触发一次改进评审 |
-| `maxImprovementsPerSkill` | `5` | 单个技能最大改进次数 |
-| `maxEvidenceSteps` | `30` | 送审证据最大步数（截断保护） |
-| `maxTracesPerSession` | `200` | 每会话轨迹缓存上限（内存保护） |
-| `maxStepTextLength` | `200` | 每步摘要截断长度 |
-| `reviewSystemPrompt` | 内建 | 结晶评审 system prompt 覆盖 |
-| `improveSystemPrompt` | 内建 | 改进评审 system prompt 覆盖 |
+| `enabled` | `true` | master switch: `false` stops turn observation and review (existing skills stay registered) |
+| `minTraceSteps` | `3` | minimum trace steps (noise floor) |
+| `minToolCalls` | `5` | `complex` signal threshold |
+| `minPatternOccurrences` | `3` | `repeated` signal threshold |
+| `minSuccessRate` | `0.7` | `repeated` signal success-rate floor |
+| `signals` | all on | `{complex, recovered, repeated}` individual toggles |
+| `complexRequiresCorroboration` | `true` | a lone `complex` signal needs corroboration before review |
+| `autoRegister` | `true` | auto-register crystallized skills into the catalog |
+| `llmProvider` / `llmModel` | `deepseek` / `deepseek-chat` | review model (the picker cascades to the provider's model catalog) |
+| `skillLanguage` | `en` | generated-skill language: `zh` / `en` |
+| `maxEvolvedSkills` | `20` | evolved-skill capacity |
+| `improvementEvery` | `3` | trigger an improvement review every N same-sequence reruns |
+| `maxImprovementsPerSkill` | `5` | max improvements per skill |
+| `maxEvidenceSteps` | `30` | max evidence steps sent to review (truncation guard) |
+| `maxTracesPerSession` | `200` | per-session trace cache cap (memory guard) |
+| `maxStepTextLength` | `200` | per-step summary truncation length |
+| `reviewSystemPrompt` | built-in | override the crystallization review system prompt |
+| `improveSystemPrompt` | built-in | override the improvement review system prompt |
 
-## 管理面板
+## Management panel
 
-设置页「技能进化」分区（`设置 → 技能进化`），双 tab 布局，右上角**总开关**随时停用/启用：
+The "Skill Evolution" section in Settings, a two-tab layout with a **master switch** in the top-right corner:
 
-- **技能 tab**：技能卡片列表——名称、描述、价值标签（高/中/低，按结晶次数与改进次数评估）、版本、调用次数（skill 工具调用 + 用户显式触发注入）、更新时间；展开看结晶信号、工具序列与完整 SKILL.md；删除/清空均两步确认
-- **设置 tab**：状态一览、评审模型（provider 级联选择）、生成语言，以及四个配置面板：
-  - **阈值与控制**：把全部阈值画成一条流水线（回合结束 → 观察过滤 → 信号检测 → 佐证闸门 → LLM 评审 → 结晶入库 → 持续改进），每个参数嵌在它起作用的那一步里，所见即所调
-  - **评审提示词**：结晶/改进两段 system prompt 就地编辑（草稿-保存工作流），可随时重置回内建版本
-  - **实时模式统计**：观察到的工具序列模式与触发计数
-  - **危险操作**：清空全部进化技能（两步确认）
+- **Skills tab** — skill cards: name, description, value chip (high/medium/low, rated from crystallization and improvement counts), version, invocation count (skill-tool calls + user-explicit injection), update time; expand for crystallization signals, tool sequence and the full SKILL.md; delete/clear use two-step confirmation
+- **Settings tab** — status overview, review model (provider-cascaded picker), generation language, and four panels:
+  - **Thresholds & controls** — all thresholds drawn as one pipeline (turn end → observation filter → signal detection → corroboration gate → LLM review → crystallization → continuous improvement), each parameter embedded in the step where it takes effect
+  - **Review prompts** — edit the crystallization/improvement system prompts in place (draft–save workflow), resettable to built-ins at any time
+  - **Live pattern stats** — observed tool-sequence patterns and trigger counts
+  - **Danger zone** — clear all evolved skills (two-step confirmation)
 
-## 数据与隐私
+## Data & privacy
 
-- 轨迹证据只存在于内存（有界缓存），不落盘
-- 落盘的只有结晶产物（`generated/*.json`：SKILL.md 正文、信号、序列、统计）与 `runtime-config.json`
-- 评审 LLM 调用走部署内已配置的 provider，不引入外部端点
-- 卸载插件即删除全部数据（`generated/` 随目录移除）
+- Trace evidence lives in memory only (bounded cache), never on disk
+- On disk: crystallization artifacts (`generated/*.json`: SKILL.md body, signals, sequences, stats) and `runtime-config.json`
+- Review LLM calls go through providers already configured in the deployment — no external endpoints introduced
+- Uninstalling the plugin removes all data (`generated/` goes with the directory)
 
-## 组成与开发
+## Layout & development
 
-双面插件包（host + web client）：
+Two-sided plugin package (host + web client):
 
-| 文件 | 角色 |
+| File | Role |
 |---|---|
-| `plugin.mjs` | 宿主半：轨迹观察、信号检测、LLM 评审、技能注册、`./generated/` 持久化、`/skill-evolution` 认证 RPC 通道（`list` / `get` / `remove` / `clear` / `listModels` / `setModel` / `setLanguage` / `setEnabled` / `setTuning` / `setPrompt` …） |
-| `client.js` | 浏览器半：设置页「技能进化」分区 |
-| `cordis.patch.yml` | `dsh.bundle.patch` 挂载层 |
-| `test/smoke.mjs` | 宿主半冒烟测试（mock cordis context，51 断言覆盖结晶/改进/FOLD_INTO/去重/RPC/计数） |
-| `test/screenshot.mjs` | 无头截图脚本（CDP 驱动，全屏模式） |
+| `plugin.mjs` | host half: trace observation, signal detection, LLM review, skill registration, `./generated/` persistence, authenticated `/skill-evolution` RPC channel (`list` / `get` / `remove` / `clear` / `listModels` / `setModel` / `setLanguage` / `setEnabled` / `setTuning` / `setPrompt` …) |
+| `client.js` | browser half: the Settings "Skill Evolution" section |
+| `cordis.patch.yml` | `dsh.bundle.patch` mount layer |
+| `test/smoke.mjs` | host-half smoke test (mock cordis context, 51 assertions covering crystallization/improvement/FOLD_INTO/dedup/RPC/counting) |
+| `test/screenshot.mjs` | headless screenshot script (CDP-driven, full-screen mode) |
 
 ```bash
-node --check plugin.mjs && node --check client.js   # 语法
-node test/smoke.mjs                                  # 冒烟测试
-node test/screenshot.mjs <输出目录>                  # 重截 README 截图
+node --check plugin.mjs && node --check client.js   # syntax
+node test/smoke.mjs                                  # smoke test
+node test/screenshot.mjs <output-dir>                # re-capture README screenshots
 ```
 
-仅依赖 `node:` 内建模块，不引入任何 `@deepseek-ai` 包，避免与宿主 cordis 双实例冲突。
-
-## English
-
-Event-driven skill self-evolution plugin for DeepSeek Harness (DSH). It watches agent execution traces and, at the end of every successful turn, fires an LLM review when any signal trips — a **complex** turn (≥5 tool calls), a **recovered** turn (failed steps but a working path found), or a **repeated** tool sequence. By default a lone `complex` signal must be corroborated by `recovered` or `repeated` before review (`complexRequiresCorroboration`, configurable). The reviewer either crystallizes a class-level reusable skill (registered into the skill catalog and persisted under `generated/`), folds near-duplicate evidence into an existing skill (`FOLD_INTO`), or answers `NOTHING_TO_SAVE`, following a hard do-not-capture list (environment failures, negative tool claims, transient errors, one-off narratives, unresolved failures). Existing evolved skills are progressively improved with fresh evidence instead of duplicated. Ships a Settings-section management UI (tabbed skills/settings views, master switch, skill cards with value/version/invocation chips, a tuning pipeline diagram with embedded controls, and in-place review-prompt editing) backed by an authenticated `/skill-evolution` RPC channel. Host half uses `node:` builtins only.
-
-Install: `dsh plugin --profile web add dsh-skill-evolution` (npm), or `link:` / `file://` mounts — see the Chinese section above for details.
+Only `node:` builtins are imported — no `@deepseek-ai` packages — avoiding any dual-instance conflict with the host's own cordis.
 
 ## License
 
