@@ -10,7 +10,6 @@ import { createHash, createHmac } from 'node:crypto'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import yaml from '/Users/yaoyuan/.local/lib/node_modules/@deepseek-ai/dsh/node_modules/js-yaml/dist/js-yaml.mjs'
 
 const GUI = 'http://127.0.0.1:3080'
 const AUTHORITY = '127.0.0.1:3080'
@@ -18,10 +17,12 @@ const OUT_DIR = process.argv[2] || '/tmp/dse-shots'
 
 // --- mint the browser cookie from the stored signing secret ----------------
 const b64u = (buf) => Buffer.from(buf).toString('base64').replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
-const creds = yaml.load(readFileSync(join(process.env.HOME, '.dsh', '.credentials.yaml'), 'utf8'))
-const record = creds?.records?.['client-connection/browser-session']
-if (!record?.payload?.secret) throw new Error('browser-session secret not found')
-const secretStr = record.payload.secret
+// The credentials document has a fixed shape; extract the one value we need
+// with a regex so this script keeps zero third-party dependencies.
+const credsText = readFileSync(join(process.env.HOME, '.dsh', '.credentials.yaml'), 'utf8')
+const secretMatch = credsText.match(/client-connection\/browser-session:[\s\S]*?secret:\s*(\S+)/)
+if (!secretMatch) throw new Error('browser-session secret not found in ~/.dsh/.credentials.yaml')
+const secretStr = secretMatch[1]
 // The server HMACs with the DECODED secret bytes, not the base64 string.
 const secret = Buffer.from(secretStr.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - secretStr.length % 4) % 4), 'base64')
 const issuedAt = Date.now()
