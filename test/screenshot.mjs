@@ -95,7 +95,7 @@ const wsUrl = await debugUrl()
 const cdp = await Cdp.connect(wsUrl)
 await cdp.send('Page.enable')
 await cdp.send('Network.enable')
-await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 2200, deviceScaleFactor: 2, mobile: false })
+await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 2, mobile: false })
 await cdp.send('Network.setCookie', { name: cookieName, value: cookieValue, domain: '127.0.0.1', path: '/', httpOnly: true })
 
 await cdp.send('Page.navigate', { url: GUI + '/' })
@@ -120,21 +120,35 @@ await cdp.eval(`(() => {
 await cdp.waitFor(`!!document.querySelector('.dse-section')`, 15000)
 await sleep(1200)
 
-const sectionRect = async () => cdp.eval(`(() => {
-  const el = document.querySelector('.dse-section');
-  el.scrollIntoView({ block: 'start' });
-  const r = el.getBoundingClientRect();
-  return { x: Math.max(0, r.x - 12), y: Math.max(0, r.y - 12), width: r.width + 24, height: r.height + 24 };
+// --- full-screen mode: hide the settings side nav, let the panel fill the
+// whole viewport so captures read as clean full-screen shots -------------------
+await cdp.eval(`(() => {
+  const style = document.createElement('style');
+  style.textContent = [
+    '[class*=_overlay] [class*=_nav] { display: none !important; }',
+    '[class*=_overlay] [class*=_panel] { position: fixed !important; inset: 0 !important;',
+    '  width: 100vw !important; height: 100vh !important; max-width: none !important;',
+    '  border-radius: 0 !important; margin: 0 !important; }',
+    '[class*=_overlay] [class*=_content] { width: 100% !important; max-width: none !important;',
+    '  height: 100% !important; padding: 24px 36px !important; overflow: hidden !important; }',
+    '.dse-section { max-width: none !important; width: 100% !important; }',
+  ].join('\\n');
+  document.head.appendChild(style);
 })()`)
+await sleep(600)
 
 async function shoot(file) {
   await sleep(500)
-  const rect = await sectionRect()
-  // CDP rejects enormous clips; cap the height so docs stay readable too.
-  const clip = { ...rect, height: Math.min(rect.height, 2400), scale: 1 }
-  const { data } = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip })
+  // Size the viewport to the content height so the whole panel fits on screen.
+  const height = await cdp.eval(`(() => {
+    const s = document.querySelector('.dse-section');
+    return Math.min(Math.round(s.getBoundingClientRect().height) + 80, 2600);
+  })()`)
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height, deviceScaleFactor: 2, mobile: false })
+  await sleep(400)
+  const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' })
   writeFileSync(join(OUT_DIR, file), Buffer.from(data, 'base64'))
-  console.log('CAPTURED:', file, clip)
+  console.log('CAPTURED:', file, `1600x${height} @2x`)
 }
 
 // 1. skills tab (default)
