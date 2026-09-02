@@ -100,11 +100,11 @@ assert(llmCalls === 1, 'successful turn with signals triggers exactly one review
 assert(registered.has('smoke-test-workflow'), 'crystallized skill is registered into the catalog')
 assert(readdirSync(GENERATED_DIR).includes('smoke-test-workflow.json'), 'crystallized skill is persisted')
 
-const list = ctx._rpc('list', { args: {} })
+const list = await ctx._rpc('list', { args: {} })
 assert(list.ok && list.value.skills.length === 1, 'RPC list returns the skill')
 assert(list.value.skills[0].signals.length >= 1, 'skill record carries crystallization signals')
 
-const got = ctx._rpc('get', { args: { name: 'smoke-test-workflow' } })
+const got = await ctx._rpc('get', { args: { name: 'smoke-test-workflow' } })
 assert(got.ok && got.value.content.includes('## Verification'), 'RPC get returns full SKILL.md content')
 
 // --- turn 2: failed turn must never be reviewed -----------------------
@@ -119,9 +119,48 @@ await new Promise((r) => setTimeout(r, 200))
 assert(llmCalls === 0, 'failed turn is never sent to review')
 
 // --- cleanup via RPC remove --------------------------------------------
-const rm = ctx._rpc('remove', { args: { name: 'smoke-test-workflow' } })
+const rm = await ctx._rpc('remove', { args: { name: 'smoke-test-workflow' } })
 assert(rm.ok && rm.value.removed === 'smoke-test-workflow', 'RPC remove succeeds')
 assert(registered.size === 0, 'removed skill is unregistered')
 assert(!readdirSync(GENERATED_DIR).includes('smoke-test-workflow.json'), 'removed skill file is deleted')
+
+// --- corroboration gate: lone complex is withheld by default ------------
+{
+  const infos = []
+  let gateLlmCalls = 0
+  const gateCtx = {
+    logger: { info: (m) => infos.push(m), warn: (m) => console.error(`[plugin warn] ${m}`) },
+    skills: { register: () => () => {} },
+    llm: { async *stream() { gateLlmCalls++; yield { type: 'text-delta', text: 'NOTHING_TO_SAVE' }; yield { type: 'finish', reason: { kind: 'completed' } } } },
+    connection: { rpc: { handle() {} } },
+    _handlers: {},
+    on(event, fn) { gateCtx._handlers[event] = fn },
+  }
+  apply(gateCtx, { llmProvider: 'mock', llmModel: 'mock' })
+  const gateSession = { id: 'gate-session' }
+  const gateEmit = (type, data) => gateCtx._handlers['session/event'](gateSession, { type, data })
+  const replayTurn = (failures) => {
+    gateEmit('user/message', { content: [{ type: 'text', text: 'gate test' }] })
+    for (let i = 0; i < 6; i++) {
+      const fail = i < failures
+      gateEmit('tool/call', { callId: `g${i}`, name: 'bash', arguments: '{}' })
+      gateEmit('tool/result', {
+        callId: `g${i}`,
+        error: fail ? { message: 'boom' } : undefined,
+        message: { source: { callId: `g${i}` }, content: [{ content: [{ type: 'text', text: fail ? 'exit 1' : 'ok' }] }] },
+      })
+    }
+    gateEmit('turn/end', { reason: { kind: 'completed' } })
+  }
+
+  replayTurn(0) // lone complex: 6 successful calls, no failures
+  await new Promise((r) => setTimeout(r, 200))
+  assert(gateLlmCalls === 0 && infos.some((m) => m.includes('withheld pending corroboration')),
+    'gate on: lone complex turn is withheld from review')
+
+  replayTurn(1) // same sequence, now with a recovered failure
+  await new Promise((r) => setTimeout(r, 200))
+  assert(gateLlmCalls === 1, 'gate on: corroborated (complex+recovered) turn reaches review')
+}
 
 console.log('\nsmoke test passed')
