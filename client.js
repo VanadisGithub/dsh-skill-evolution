@@ -228,7 +228,7 @@ window.__ModuleLoader__.load({
 						h("span", { className: "dse-dot", "data-on": summary.registered, title: summary.registered ? "已注册到技能目录" : "未注册（autoRegister 关闭）" }),
 						h("span", { className: "dse-chip", "data-kind": value, title: "按出现次数、改进次数与版本估算" }, VALUE_LABELS[value]),
 						h("span", { className: "dse-chip", title: "结晶为 v1，每次评审改进 +1" }, "v" + summary.version),
-						h("span", { className: "dse-chip", title: "agent 通过 skill 工具加载该技能的次数" }, (summary.invocations || 0) + " 次调用"),
+						h("span", { className: "dse-chip", title: "技能被加载的次数：agent 调用 skill 工具，或用户直接触发注入" }, (summary.invocations || 0) + " 次调用"),
 						h("span", { className: "dse-chip", title: "最近更新：" + fmtTime(summary.updatedAt) }, "update:" + fmtShortTime(summary.updatedAt)),
 						h(Chevron))),
 				open ? h("div", { className: "dse-cardBody" },

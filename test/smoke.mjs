@@ -118,6 +118,15 @@ await new Promise((r) => setTimeout(r, 50))
 const counted = await ctx._rpc('list', { args: {} })
 assert(counted.value.skills[0].invocations === 1, 'loading the skill through the skill tool counts an invocation')
 
+// --- user-explicit invocation injection also counts -----------------------
+emit('user/message', {
+  content: [{ type: 'text', text: '<skill_content name="smoke-test-workflow">body</skill_content>' }],
+  source: { kind: 'skill-invocation', name: 'smoke-test-workflow', form: 'instructions' },
+})
+await new Promise((r) => setTimeout(r, 50))
+const injected = await ctx._rpc('list', { args: {} })
+assert(injected.value.skills[0].invocations === 2, 'a host-injected skill invocation counts an invocation too')
+
 // --- turn 2: failed turn must never be reviewed -----------------------
 llmCalls = 0
 emit('user/message', { content: [{ type: 'text', text: 'failing task' }] })

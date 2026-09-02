@@ -1099,7 +1099,18 @@ export function apply(ctx, config = {}) {
     } catch {
       return
     }
-    if (!SKILL_NAME_RE.test(name)) return
+    countSkillInvocation(name)
+  }
+
+  /**
+   * Increment and persist one evolved skill's invocation count. Shared by both
+   * load paths: the model-facing `skill` tool call and the host-injected
+   * user-explicit invocation (a user/message carrying a `skill-invocation`
+   * source instead of a tool/call).
+   * @param {string} name - invoked skill name
+   */
+  function countSkillInvocation(name) {
+    if (typeof name !== 'string' || !SKILL_NAME_RE.test(name)) return
     const entry = evolvedSkills.get(name)
     if (!entry) return
     entry.record = { ...entry.record, invocations: entry.record.invocations + 1 }
@@ -1131,6 +1142,15 @@ export function apply(ctx, config = {}) {
     const sessionId = String(session.id)
 
     if (event.type === 'user/message') {
+      // User-explicit skill invocation: the harness injects the rendered skill
+      // body as a user message tagged with a `skill-invocation` source (no
+      // tool/call fires). Count it, and don't mistake the injected body for
+      // the user's own words — those ride a separate plain user message.
+      const source = event.data && typeof event.data === 'object' ? event.data.source : undefined
+      if (source && typeof source === 'object' && source.kind === 'skill-invocation') {
+        countSkillInvocation(source.name)
+        return
+      }
       let text = ''
       if (Array.isArray(event.data?.content)) {
         for (const block of event.data.content) {
