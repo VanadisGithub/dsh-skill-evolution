@@ -348,6 +348,7 @@ window.__ModuleLoader__.load({
 						config.signals && config.signals.complex ? h("span", { className: "dse-chip" }, "信号：复杂任务 ≥" + config.minToolCalls + " 次调用") : null,
 						config.signals && config.signals.recovered ? h("span", { className: "dse-chip" }, "信号：从错误中恢复") : null,
 						config.signals && config.signals.repeated ? h("span", { className: "dse-chip" }, "信号：序列重复 ≥" + config.minPatternOccurrences + " 次") : null,
+						config.complexRequiresCorroboration ? h("span", { className: "dse-chip" }, "闸门：单独 complex 需佐证才送审") : null,
 						h("span", { className: "dse-chip" }, "LLM：" + config.llmProvider + " / " + config.llmModel + (config.modelSource === "runtime" ? "（界面设置）" : "")),
 						h("span", { className: "dse-chip" }, "容量：" + skills.length + "/" + config.maxEvolvedSkills)),
 					h(ModelConfig, { config, onChanged: load }),

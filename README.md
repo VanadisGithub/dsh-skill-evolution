@@ -16,6 +16,8 @@ DeepSeek Harness（DSH）的 **Hermes 式技能自进化插件**：观察 agent 
 | `recovered` | 有失败步骤但回合最终成功（找到了绕行路径） | "hit errors or dead ends and found the working path" |
 | `repeated` | 同一工具序列出现 ≥ `minPatternOccurrences` 次且成功率 ≥ `minSuccessRate` | 重复轨迹学习（GEPA 式） |
 
+**单独 complex 闸门**（`complexRequiresCorroboration`，默认开）：`complex` 单独触发是弱证据（任何长回合都满足），默认必须叠加 `recovered` 或 `repeated` 佐证才送评审；被拦下的回合会在日志里记一条 withheld，等序列后续出现佐证信号时再送审。设为 `false` 恢复原"任一信号即送审"行为。
+
 **评审门禁**（Hermes background-review 模型）：评审 LLM 收到完整证据（信号、用户意图、工具序列、每步成败与摘要），决定 `SAVE` 或 `NOTHING_TO_SAVE`。硬性负面清单——以下内容**绝不结晶**：
 
 - 环境性失败（缺二进制、未配置凭证、未装包）
@@ -92,6 +94,7 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 | `minPatternOccurrences` | `3` | `repeated` 信号阈值 |
 | `minSuccessRate` | `0.7` | `repeated` 信号成功率下限 |
 | `signals` | 全开 | `{complex, recovered, repeated}` 分别开关 |
+| `complexRequiresCorroboration` | `true` | 单独 `complex` 信号需叠加 `recovered`/`repeated` 佐证才送评审 |
 | `autoRegister` | `true` | 结晶后自动注册进技能目录 |
 | `llmProvider` / `llmModel` | `deepseek` / `deepseek-chat` | 评审用的模型（必须是部署中存在的 provider）。**也可直接在设置面板里修改**，见下方说明 |
 | `maxEvolvedSkills` | `20` | 进化技能容量上限 |
@@ -143,7 +146,7 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 
 ## English
 
-Hermes-style skill self-evolution plugin for DeepSeek Harness (DSH). It watches agent execution traces and, at the end of every successful turn, fires an LLM review when any signal trips — a **complex** turn (≥5 tool calls), a **recovered** turn (failed steps but a working path found), or a **repeated** tool sequence. The reviewer either crystallizes a class-level reusable skill (registered into the skill catalog and persisted under `generated/`) or answers `NOTHING_TO_SAVE`, following Hermes' do-not-capture rules (environment failures, negative tool claims, transient errors, one-off narratives, unresolved failures). Existing evolved skills are progressively improved with fresh evidence instead of duplicated. Ships a Settings-section management UI (view / expand / delete / clear) backed by an authenticated `/skill-evolution` RPC channel. Host half uses `node:` builtins only.
+Hermes-style skill self-evolution plugin for DeepSeek Harness (DSH). It watches agent execution traces and, at the end of every successful turn, fires an LLM review when any signal trips — a **complex** turn (≥5 tool calls), a **recovered** turn (failed steps but a working path found), or a **repeated** tool sequence. By default a lone `complex` signal must be corroborated by `recovered` or `repeated` before review (`complexRequiresCorroboration`, configurable). The reviewer either crystallizes a class-level reusable skill (registered into the skill catalog and persisted under `generated/`) or answers `NOTHING_TO_SAVE`, following Hermes' do-not-capture rules (environment failures, negative tool claims, transient errors, one-off narratives, unresolved failures). Existing evolved skills are progressively improved with fresh evidence instead of duplicated. Ships a Settings-section management UI (view / expand / delete / clear) backed by an authenticated `/skill-evolution` RPC channel. Host half uses `node:` builtins only.
 
 Install: `dsh plugin --profile web add dsh-skill-evolution` (npm), or `link:` / `file://` mounts — see the Chinese section above for details.
 

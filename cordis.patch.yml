@@ -22,6 +22,8 @@
 #   autoRegister            register crystallized skills into the catalog (default true)
 #   llmProvider / llmModel  reviewer model (defaults: deepseek / deepseek-chat)
 #   signals: {complex, recovered, repeated}  toggle individual signals
+#   complexRequiresCorroboration  lone complex signal needs recovered/repeated
+#                                 corroboration before review (default true)
 - insert:
   - id: 'skill-evolution'
     name: 'dsh-skill-evolution'

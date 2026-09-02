@@ -14,6 +14,10 @@
  *      • repeated  — the same tool sequence recurred >= minPatternOccurrences
  *                    times with success rate >= minSuccessRate (the offline
  *                    GEPA-style "learn from repeated traces" signal)
+ *    A lone `complex` signal is weak evidence on its own (any long turn
+ *    qualifies), so by default it must be corroborated by `recovered` or
+ *    `repeated` before a review is triggered; the gate is configurable via
+ *    `complexRequiresCorroboration`.
  *  - The LLM reviewer decides what is worth keeping. "NOTHING_TO_SAVE" is a
  *    first-class outcome, and a hard DO-NOT-capture list filters noise:
  *    environment-dependent failures, negative tool claims, transient errors
@@ -48,6 +52,7 @@ const DEFAULT_MAX_EVOLVED_SKILLS = 20
 const DEFAULT_MAX_EVIDENCE_STEPS = 30
 const DEFAULT_IMPROVEMENT_EVERY = 3
 const DEFAULT_MAX_IMPROVEMENTS_PER_PROCESS = 5
+const DEFAULT_COMPLEX_REQUIRES_CORROBORATION = true
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const GENERATED_DIR = join(PLUGIN_DIR, 'generated')
@@ -85,6 +90,7 @@ export function apply(ctx, config = {}) {
   const maxEvidenceSteps = config.maxEvidenceSteps ?? DEFAULT_MAX_EVIDENCE_STEPS
   const improvementEvery = config.improvementEvery ?? DEFAULT_IMPROVEMENT_EVERY
   const maxImprovementsPerProcess = config.maxImprovementsPerProcess ?? DEFAULT_MAX_IMPROVEMENTS_PER_PROCESS
+  const complexRequiresCorroboration = config.complexRequiresCorroboration ?? DEFAULT_COMPLEX_REQUIRES_CORROBORATION
   const signalsConfig = safeRecord(config.signals) ?? {}
   const signalEnabled = {
     complex: signalsConfig.complex ?? true,
@@ -344,7 +350,9 @@ export function apply(ctx, config = {}) {
 
   /**
    * Hermes trigger conditions, adapted to host-side trace evidence. Any one
-   * fired signal warrants an LLM review of the turn.
+   * fired signal warrants an LLM review of the turn — except a lone `complex`
+   * signal when the corroboration gate is on: it must be accompanied by
+   * `recovered` or `repeated` to reach the reviewer.
    * @returns {{signals: string[], pattern: object}} detected signals
    */
   function detectSignals(trace, pattern) {
@@ -363,6 +371,14 @@ export function apply(ctx, config = {}) {
       && pattern.successRate >= minSuccessRate
     ) {
       signals.push(`repeated (sequence seen ${pattern.occurrences}x, ${Math.round(pattern.successRate * 100)}% success)`)
+    }
+    if (
+      complexRequiresCorroboration
+      && signals.some(s => s.startsWith('complex'))
+      && !signals.some(s => s.startsWith('recovered') || s.startsWith('repeated'))
+    ) {
+      ctx.logger.info(`skill-evolution: lone complex signal withheld pending corroboration (occurrence ${pattern.occurrences}): ${pattern.toolSequence.join('→')}`)
+      return { signals: [], pattern }
     }
     return { signals, pattern }
   }
@@ -651,6 +667,7 @@ export function apply(ctx, config = {}) {
       minSuccessRate,
       maxEvolvedSkills,
       signals: { ...signalEnabled },
+      complexRequiresCorroboration,
       llmProvider,
       llmModel,
       modelSource,
