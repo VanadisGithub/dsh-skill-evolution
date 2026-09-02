@@ -98,6 +98,20 @@ window.__ModuleLoader__.load({
 .dse-chip[data-kind=medium]{background:color-mix(in srgb, var(--dsw-alias-state-warning-primary,#b45309) 12%, transparent);color:var(--dsw-alias-state-warning-primary,#b45309);border-color:transparent}
 .dse-chip[data-kind=low]{color:var(--dsw-alias-label-tertiary)}
 .dse-help{color:var(--dsw-alias-label-tertiary);font-size:10.5px;line-height:14px}
+.dse-flow{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);border-radius:10px;flex-direction:column;padding:12px 14px;display:flex}
+.dse-flowTitle{color:var(--dsw-alias-label-tertiary);margin:0 0 8px;font-size:11px}
+.dse-flowStage{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:8px;flex-direction:column;gap:4px;padding:8px 10px;display:flex}
+.dse-flowStageHead{align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--dsw-alias-label-primary);display:flex}
+.dse-flowBadge{background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary-foreground);border-radius:999px;flex:none;justify-content:center;align-items:center;width:18px;height:18px;font-size:11px;display:inline-flex}
+.dse-flowBadge[data-muted=true]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);border:1px solid var(--dsw-alias-border-l2)}
+.dse-flowDesc{color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:16px}
+.dse-flowParams{flex-wrap:wrap;gap:4px;display:flex}
+.dse-flowParam{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);white-space:nowrap;border-radius:5px;padding:1px 6px;font-family:var(--ds-font-family-code);font-size:10.5px;display:inline-flex}
+.dse-flowArrow{color:var(--dsw-alias-label-tertiary);align-self:center;font-size:12px;line-height:1;padding:3px 0}
+.dse-flowLoop{border-left:2px dashed var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-tertiary);margin-left:9px;padding:2px 0 2px 10px;font-size:11px}
+.dse-group{flex-direction:column;gap:6px;display:flex}
+.dse-groupTitle{align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);display:flex}
+.dse-groupNote{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:15px}
 @media (width<=680px){.dse-head{flex-direction:column}}
 `;
 
@@ -393,21 +407,57 @@ window.__ModuleLoader__.load({
 		// (maxEvidenceSteps, maxImprovementsPerProcess, maxStepTextLength,
 		// maxTracesPerSession) stay mount-config-only.
 		const NUM_TUNABLES = [
-			["minToolCalls", "complex 阈值：工具调用数", "成功回合的工具调用数达到该值，视为完成了一次复杂任务"],
-			["minPatternOccurrences", "repeated 阈值：序列出现次数", "同一工具序列重复出现达到该次数且成功率达标，触发重复学习"],
-			["minSuccessRate", "repeated 成功率下限", "触发 repeated 信号要求该序列的历史成功率（0-1）"],
-			["minTraceSteps", "轨迹最小步数", "少于该步数的回合直接忽略，用于过滤琐碎操作"],
-			["improvementEvery", "改进评审频率", "同一序列每重跑该次数，把新经验合并进已有技能（版本递增）"],
-			["maxEvolvedSkills", "技能容量上限", "最多保留多少个进化技能，达到上限后不再结晶新技能"],
+			["minToolCalls", "多少步算「复杂任务」", "一次成功执行里工具调用达到这个数，就认为完成了一件复杂的事"],
+			["minPatternOccurrences", "重复几次才值得学", "同一套操作反复出现达到这个次数，才认为它是有规律的工作流"],
+			["minSuccessRate", "序列成熟度（成功率）", "上面这套操作的历史成功率要达到这个值（0-1），才算「成熟可靠」"],
+			["minTraceSteps", "最短回合步数", "执行步数少于这个值的回合直接忽略，过滤一问一答式的琐碎操作"],
+			["improvementEvery", "改进节奏", "技能结晶后，同一套操作每再执行这个次数，就复审一次并把新经验并入技能（版本 +1）"],
+			["maxEvolvedSkills", "技能库容量", "最多保留多少个进化技能，满了就不再结晶新的"],
 		];
 
 		const BOOL_TUNABLES = [
-			["signals.complex", "信号：复杂任务", "成功且工具调用数达到阈值的回合送 LLM 评审"],
-			["signals.recovered", "信号：错误恢复", "有失败步骤但最终成功的回合送评审（找到了绕行路径）"],
-			["signals.repeated", "信号：序列重复", "重复出现且成功率达标的工具序列送评审"],
-			["complexRequiresCorroboration", "闸门：complex 需佐证", "仅 complex 单独触发时不送审，需叠加错误恢复或序列重复"],
-			["autoRegister", "自动注册", "结晶的技能自动注册进技能目录，供 agent 直接调用"],
+			["signals.complex", "复杂任务信号", "「干了很多活」的回合值得学习"],
+			["signals.recovered", "错误恢复信号", "「踩过坑又绕过去了」的回合值得学习"],
+			["signals.repeated", "序列重复信号", "「反复做同一套操作」的回合值得学习"],
+			["complexRequiresCorroboration", "复杂信号需佐证", "光是「干了很多活」不足以送审，还要有踩坑恢复或反复重做的证据"],
+			["autoRegister", "技能自动上架", "结晶出的技能自动注册进技能目录，agent 可以直接调用"],
 		];
+
+		// Read-only pipeline diagram: shows where each knob takes effect. The
+		// parameter chips use the same names as the grouped controls below.
+		function TuningFlow() {
+			const stage = (badge, title, desc, params, muted) => h("div", { className: "dse-flowStage" },
+				h("div", { className: "dse-flowStageHead" },
+					h("span", { className: "dse-flowBadge", "data-muted": muted || undefined }, badge),
+					title),
+				desc ? h("div", { className: "dse-flowDesc" }, desc) : null,
+				params && params.length > 0
+					? h("div", { className: "dse-flowParams" }, params.map((p) => h("span", { key: p, className: "dse-flowParam" }, p)))
+					: null);
+			const arrow = () => h("div", { className: "dse-flowArrow" }, "▼");
+			return h("div", { className: "dse-flow" },
+				h("p", { className: "dse-flowTitle" }, "一个参数在哪一步起作用？沿流程看一遍："),
+				stage("●", "回合结束", "agent 完成一次执行，且这次执行是成功的（失败的回合绝不学习）", []),
+				arrow(),
+				stage("①", "观察过滤", "太短的回合直接忽略——一问一答式的琐碎操作没有沉淀价值", ["minTraceSteps"]),
+				arrow(),
+				stage("②", "信号检测", "判断这一回合值不值得学，三种信号各自独立开关：", ["signals.complex", "signals.recovered", "signals.repeated"]),
+				h("div", { className: "dse-flowLoop" },
+					"complex：工具调用数 ≥ minToolCalls，干完了一件复杂的事", h("br"),
+					"recovered：有步骤失败但最终成功，踩坑后找到了绕行路径", h("br"),
+					"repeated：同一套操作出现 ≥ minPatternOccurrences 次，且成功率 ≥ minSuccessRate"),
+				arrow(),
+				stage("③", "佐证闸门", "开启时：只有「干了很多活」不送审，还需叠加踩坑恢复或反复重做的证据", ["complexRequiresCorroboration"]),
+				arrow(),
+				stage("④", "LLM 评审", "把完整证据交给评审模型（模型与提示词在下方对应面板配置），三种结果：", [], true),
+				h("div", { className: "dse-flowLoop" },
+					"SAVE → 结晶为新技能 · FOLD_INTO → 并入已有技能（防重复） · NOTHING_TO_SAVE → 放弃"),
+				arrow(),
+				stage("⑤", "结晶入库", "新技能写入技能库；容量满了就不再结晶", ["maxEvolvedSkills", "autoRegister"]),
+				arrow(),
+				stage("⑥", "持续改进", "技能是活的：同一套操作再次执行时，把新经验并入已有技能并升版本", ["improvementEvery"]),
+				h("div", { className: "dse-flowLoop" }, "↺ 每重跑 improvementEvery 次回到 ④ 复审一次，循环往复"));
+		}
 
 		function TuningPanel({ config, onChanged }) {
 			const defaults = config.defaults || {};
@@ -467,31 +517,50 @@ window.__ModuleLoader__.load({
 					.catch((e) => { setBusy(false); setMessage({ ok: false, text: String(e.message || e) }); });
 			}, [onChanged]);
 
+			const GROUPS = [
+				{ badge: "①", title: "观察过滤", numeric: ["minTraceSteps"], bools: [] },
+				{ badge: "②", title: "信号检测", numeric: ["minToolCalls", "minPatternOccurrences", "minSuccessRate"], bools: ["signals.complex", "signals.recovered", "signals.repeated"] },
+				{ badge: "③", title: "佐证闸门", numeric: [], bools: ["complexRequiresCorroboration"] },
+				{ badge: "⑤", title: "结晶入库", numeric: ["maxEvolvedSkills"], bools: ["autoRegister"] },
+				{ badge: "⑥", title: "持续改进", numeric: ["improvementEvery"], bools: [] },
+			];
+			const fieldOf = (key) => NUM_TUNABLES.find(([k]) => k === key);
+			const toggleOf = (key) => BOOL_TUNABLES.find(([k]) => k === key);
+
 			return h("details", { className: "dse-panel" },
 				h("summary", {}, "阈值与控制" + (overridden ? "（已定制：" + overriddenKeys.join("、") + "）" : "")),
-				h("div", { className: "dse-grid" },
-					NUM_TUNABLES.map(([key, label, help]) => {
-						const range = rangeOf(key);
-						return h("label", { key, className: "dse-field" },
-							h("span", {}, label),
-							h("input", {
-								type: "number",
-								value: draft.numbers[key],
-								step: key === "minSuccessRate" ? "0.05" : "1",
-								min: range ? range[0] : undefined,
-								max: range ? range[1] : undefined,
-								onChange: (e) => setDraft({ ...draft, numbers: { ...draft.numbers, [key]: e.target.value } }),
-							}),
-							h("span", { className: "dse-help" }, help));
-					})),
-				h("div", { className: "dse-toggles" },
-					BOOL_TUNABLES.map(([key, label, title]) => h("label", { key, className: "dse-toggle", title },
-						h("input", {
-							type: "checkbox",
-							checked: !!draft.bools[key],
-							onChange: (e) => setDraft({ ...draft, bools: { ...draft.bools, [key]: e.target.checked } }),
-						}),
-						h("span", {}, label)))),
+				h(TuningFlow),
+				GROUPS.map((group) => h("div", { key: group.badge, className: "dse-group" },
+					h("div", { className: "dse-groupTitle" },
+						h("span", { className: "dse-flowBadge" }, group.badge),
+						group.title),
+					group.numeric.length > 0 ? h("div", { className: "dse-grid" },
+						group.numeric.map((key) => {
+							const [, label, help] = fieldOf(key);
+							const range = rangeOf(key);
+							return h("label", { key, className: "dse-field" },
+								h("span", {}, label),
+								h("input", {
+									type: "number",
+									value: draft.numbers[key],
+									step: key === "minSuccessRate" ? "0.05" : "1",
+									min: range ? range[0] : undefined,
+									max: range ? range[1] : undefined,
+									onChange: (e) => setDraft({ ...draft, numbers: { ...draft.numbers, [key]: e.target.value } }),
+								}),
+								h("span", { className: "dse-help" }, help));
+						})) : null,
+					group.bools.length > 0 ? h("div", { className: "dse-toggles" },
+						group.bools.map((key) => {
+							const [, label, title] = toggleOf(key);
+							return h("label", { key, className: "dse-toggle", title },
+								h("input", {
+									type: "checkbox",
+									checked: !!draft.bools[key],
+									onChange: (e) => setDraft({ ...draft, bools: { ...draft.bools, [key]: e.target.checked } }),
+								}),
+								h("span", {}, label));
+						})) : null)),
 				message ? h("p", { className: message.ok ? "dse-modelSaved" : "dse-failure" }, message.text) : null,
 				h("div", { className: "dse-panelActions" },
 					h("button", { type: "button", className: "dse-btn", "data-primary": true, disabled: busy || !dirty, onClick: save }, busy ? "保存中…" : "保存改动"),
