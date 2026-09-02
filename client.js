@@ -105,13 +105,12 @@ window.__ModuleLoader__.load({
 .dse-flowBadge{background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary-foreground);border-radius:999px;flex:none;justify-content:center;align-items:center;width:18px;height:18px;font-size:11px;display:inline-flex}
 .dse-flowBadge[data-muted=true]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);border:1px solid var(--dsw-alias-border-l2)}
 .dse-flowDesc{color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:16px}
-.dse-flowParams{flex-wrap:wrap;gap:4px;display:flex}
-.dse-flowParam{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);white-space:nowrap;border-radius:5px;padding:1px 6px;font-family:var(--ds-font-family-code);font-size:10.5px;display:inline-flex}
+.dse-flowNote{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .dse-flowArrow{color:var(--dsw-alias-label-tertiary);align-self:center;font-size:12px;line-height:1;padding:3px 0}
-.dse-flowLoop{border-left:2px dashed var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-tertiary);margin-left:9px;padding:2px 0 2px 10px;font-size:11px}
-.dse-group{flex-direction:column;gap:6px;display:flex}
-.dse-groupTitle{align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);display:flex}
-.dse-groupNote{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:15px}
+.dse-signalRow{align-items:center;gap:6px;flex-wrap:wrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:20px;display:flex}
+.dse-signalRow input[type=checkbox]{accent-color:var(--dsw-alias-brand-primary);cursor:pointer;flex:none;margin:0;width:14px;height:14px}
+.dse-inlineNum{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border-radius:5px;flex:none;height:24px;font:inherit;font-size:12px;padding:0 6px;width:64px}
+.dse-inlineNum:focus{border-color:var(--dsw-alias-brand-primary);outline:none}
 @media (width<=680px){.dse-head{flex-direction:column}}
 `;
 
@@ -423,42 +422,6 @@ window.__ModuleLoader__.load({
 			["autoRegister", "技能自动上架", "结晶出的技能自动注册进技能目录，agent 可以直接调用"],
 		];
 
-		// Read-only pipeline diagram: shows where each knob takes effect. The
-		// parameter chips use the same names as the grouped controls below.
-		function TuningFlow() {
-			const stage = (badge, title, desc, params, muted) => h("div", { className: "dse-flowStage" },
-				h("div", { className: "dse-flowStageHead" },
-					h("span", { className: "dse-flowBadge", "data-muted": muted || undefined }, badge),
-					title),
-				desc ? h("div", { className: "dse-flowDesc" }, desc) : null,
-				params && params.length > 0
-					? h("div", { className: "dse-flowParams" }, params.map((p) => h("span", { key: p, className: "dse-flowParam" }, p)))
-					: null);
-			const arrow = () => h("div", { className: "dse-flowArrow" }, "▼");
-			return h("div", { className: "dse-flow" },
-				h("p", { className: "dse-flowTitle" }, "一个参数在哪一步起作用？沿流程看一遍："),
-				stage("●", "回合结束", "agent 完成一次执行，且这次执行是成功的（失败的回合绝不学习）", []),
-				arrow(),
-				stage("①", "观察过滤", "太短的回合直接忽略——一问一答式的琐碎操作没有沉淀价值", ["minTraceSteps"]),
-				arrow(),
-				stage("②", "信号检测", "判断这一回合值不值得学，三种信号各自独立开关：", ["signals.complex", "signals.recovered", "signals.repeated"]),
-				h("div", { className: "dse-flowLoop" },
-					"complex：工具调用数 ≥ minToolCalls，干完了一件复杂的事", h("br"),
-					"recovered：有步骤失败但最终成功，踩坑后找到了绕行路径", h("br"),
-					"repeated：同一套操作出现 ≥ minPatternOccurrences 次，且成功率 ≥ minSuccessRate"),
-				arrow(),
-				stage("③", "佐证闸门", "开启时：只有「干了很多活」不送审，还需叠加踩坑恢复或反复重做的证据", ["complexRequiresCorroboration"]),
-				arrow(),
-				stage("④", "LLM 评审", "把完整证据交给评审模型（模型与提示词在下方对应面板配置），三种结果：", [], true),
-				h("div", { className: "dse-flowLoop" },
-					"SAVE → 结晶为新技能 · FOLD_INTO → 并入已有技能（防重复） · NOTHING_TO_SAVE → 放弃"),
-				arrow(),
-				stage("⑤", "结晶入库", "新技能写入技能库；容量满了就不再结晶", ["maxEvolvedSkills", "autoRegister"]),
-				arrow(),
-				stage("⑥", "持续改进", "技能是活的：同一套操作再次执行时，把新经验并入已有技能并升版本", ["improvementEvery"]),
-				h("div", { className: "dse-flowLoop" }, "↺ 每重跑 improvementEvery 次回到 ④ 复审一次，循环往复"));
-		}
-
 		function TuningPanel({ config, onChanged }) {
 			const defaults = config.defaults || {};
 			const bounds = config.tuningBounds || {};
@@ -517,50 +480,88 @@ window.__ModuleLoader__.load({
 					.catch((e) => { setBusy(false); setMessage({ ok: false, text: String(e.message || e) }); });
 			}, [onChanged]);
 
-			const GROUPS = [
-				{ badge: "①", title: "观察过滤", numeric: ["minTraceSteps"], bools: [] },
-				{ badge: "②", title: "信号检测", numeric: ["minToolCalls", "minPatternOccurrences", "minSuccessRate"], bools: ["signals.complex", "signals.recovered", "signals.repeated"] },
-				{ badge: "③", title: "佐证闸门", numeric: [], bools: ["complexRequiresCorroboration"] },
-				{ badge: "⑤", title: "结晶入库", numeric: ["maxEvolvedSkills"], bools: ["autoRegister"] },
-				{ badge: "⑥", title: "持续改进", numeric: ["improvementEvery"], bools: [] },
-			];
-			const fieldOf = (key) => NUM_TUNABLES.find(([k]) => k === key);
-			const toggleOf = (key) => BOOL_TUNABLES.find(([k]) => k === key);
+			// Controls embedded directly in the flow diagram: each knob sits in
+			// the sentence of the stage where it takes effect.
+			const numInline = (key) => {
+				const [, , help] = NUM_TUNABLES.find(([k]) => k === key);
+				const range = rangeOf(key);
+				return h("input", {
+					key: "num:" + key,
+					className: "dse-inlineNum",
+					type: "number",
+					title: help,
+					value: draft.numbers[key],
+					step: key === "minSuccessRate" ? "0.05" : "1",
+					min: range ? range[0] : undefined,
+					max: range ? range[1] : undefined,
+					onChange: (e) => setDraft({ ...draft, numbers: { ...draft.numbers, [key]: e.target.value } }),
+				});
+			};
+			const boolInline = (key) => {
+				const [, , title] = BOOL_TUNABLES.find(([k]) => k === key);
+				return h("input", {
+					key: "bool:" + key,
+					type: "checkbox",
+					title,
+					checked: !!draft.bools[key],
+					onChange: (e) => setDraft({ ...draft, bools: { ...draft.bools, [key]: e.target.checked } }),
+				});
+			};
+			const stage = (badge, title, children) => h("div", { className: "dse-flowStage" },
+				h("div", { className: "dse-flowStageHead" },
+					h("span", { className: "dse-flowBadge" }, badge),
+					title),
+				children);
+			const arrow = () => h("div", { className: "dse-flowArrow" }, "▼");
 
 			return h("details", { className: "dse-panel" },
 				h("summary", {}, "阈值与控制" + (overridden ? "（已定制：" + overriddenKeys.join("、") + "）" : "")),
-				h(TuningFlow),
-				GROUPS.map((group) => h("div", { key: group.badge, className: "dse-group" },
-					h("div", { className: "dse-groupTitle" },
-						h("span", { className: "dse-flowBadge" }, group.badge),
-						group.title),
-					group.numeric.length > 0 ? h("div", { className: "dse-grid" },
-						group.numeric.map((key) => {
-							const [, label, help] = fieldOf(key);
-							const range = rangeOf(key);
-							return h("label", { key, className: "dse-field" },
-								h("span", {}, label),
-								h("input", {
-									type: "number",
-									value: draft.numbers[key],
-									step: key === "minSuccessRate" ? "0.05" : "1",
-									min: range ? range[0] : undefined,
-									max: range ? range[1] : undefined,
-									onChange: (e) => setDraft({ ...draft, numbers: { ...draft.numbers, [key]: e.target.value } }),
-								}),
-								h("span", { className: "dse-help" }, help));
-						})) : null,
-					group.bools.length > 0 ? h("div", { className: "dse-toggles" },
-						group.bools.map((key) => {
-							const [, label, title] = toggleOf(key);
-							return h("label", { key, className: "dse-toggle", title },
-								h("input", {
-									type: "checkbox",
-									checked: !!draft.bools[key],
-									onChange: (e) => setDraft({ ...draft, bools: { ...draft.bools, [key]: e.target.checked } }),
-								}),
-								h("span", {}, label));
-						})) : null)),
+				h("div", { className: "dse-flow" },
+					h("p", { className: "dse-flowTitle" }, "参数直接嵌在流程里——在哪一步起作用，就在哪一步改："),
+					stage("●", "回合结束",
+						h("div", { className: "dse-flowDesc" }, "agent 完成一次执行，且这次执行是成功的（失败的回合绝不学习）")),
+					arrow(),
+					stage("①", "观察过滤",
+						h("label", { className: "dse-signalRow" },
+							h("span", {}, "执行步数 <"), numInline("minTraceSteps"),
+							h("span", {}, "的回合直接忽略——一问一答式的琐碎操作没有沉淀价值"))),
+					arrow(),
+					stage("②", "信号检测",
+						h("div", { className: "dse-flowDesc" }, "判断这一回合值不值得学，三种信号各自独立开关："),
+						h("label", { className: "dse-signalRow" },
+							boolInline("signals.complex"),
+							h("span", {}, "复杂任务：工具调用数 ≥"), numInline("minToolCalls"),
+							h("span", {}, "，干完了一件复杂的事")),
+						h("label", { className: "dse-signalRow" },
+							boolInline("signals.recovered"),
+							h("span", {}, "错误恢复：有步骤失败但最终成功，踩坑后找到了绕行路径")),
+						h("label", { className: "dse-signalRow" },
+							boolInline("signals.repeated"),
+							h("span", {}, "序列重复：同一套操作出现 ≥"), numInline("minPatternOccurrences"),
+							h("span", {}, "次 · 成功率 ≥"), numInline("minSuccessRate"))),
+					arrow(),
+					stage("③", "佐证闸门",
+						h("label", { className: "dse-signalRow" },
+							boolInline("complexRequiresCorroboration"),
+							h("span", {}, "需要佐证：光是「干了很多活」不送审，还需叠加踩坑恢复或反复重做的证据"))),
+					arrow(),
+					stage("④", "LLM 评审",
+						h("div", { className: "dse-flowNote" },
+							"SAVE → 结晶为新技能 · FOLD_INTO → 并入已有技能（防重复） · NOTHING_TO_SAVE → 放弃", h("br"),
+							"评审模型、提示词与生成语言在下方对应面板配置")),
+					arrow(),
+					stage("⑤", "结晶入库",
+						h("label", { className: "dse-signalRow" },
+							h("span", {}, "技能库最多保存"), numInline("maxEvolvedSkills"),
+							h("span", {}, "个技能，满了就不再结晶")),
+						h("label", { className: "dse-signalRow" },
+							boolInline("autoRegister"),
+							h("span", {}, "自动上架：结晶的技能自动注册进技能目录，agent 可直接调用"))),
+					arrow(),
+					stage("⑥", "持续改进",
+						h("label", { className: "dse-signalRow" },
+							h("span", {}, "同一套操作再执行"), numInline("improvementEvery"),
+							h("span", {}, "次 → 回到 ④ 复审一次，把新经验并入技能并升版本")))),
 				message ? h("p", { className: message.ok ? "dse-modelSaved" : "dse-failure" }, message.text) : null,
 				h("div", { className: "dse-panelActions" },
 					h("button", { type: "button", className: "dse-btn", "data-primary": true, disabled: busy || !dirty, onClick: save }, busy ? "保存中…" : "保存改动"),
