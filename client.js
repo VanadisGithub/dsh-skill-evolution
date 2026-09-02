@@ -141,6 +141,18 @@ window.__ModuleLoader__.load({
 			}
 		}
 
+		// Compact month-day stamp for the card chip; the tooltip keeps the full time.
+		function fmtShortTime(iso) {
+			if (typeof iso !== "string" || iso.length === 0) return "-";
+			try {
+				const d = new Date(iso);
+				const pad = (n) => String(n).padStart(2, "0");
+				return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+			} catch {
+				return iso;
+			}
+		}
+
 		function pct(rate) {
 			return Math.round((typeof rate === "number" ? rate : 0) * 100) + "%";
 		}
@@ -215,9 +227,9 @@ window.__ModuleLoader__.load({
 					h("span", { className: "dse-cardTrailing" },
 						h("span", { className: "dse-dot", "data-on": summary.registered, title: summary.registered ? "已注册到技能目录" : "未注册（autoRegister 关闭）" }),
 						h("span", { className: "dse-chip", "data-kind": value, title: "按出现次数、改进次数与版本估算" }, VALUE_LABELS[value]),
-						"v" + summary.version,
-						(summary.invocations || 0) + " 次调用",
-						"更新于 " + fmtTime(summary.updatedAt),
+						h("span", { className: "dse-chip", title: "结晶为 v1，每次评审改进 +1" }, "v" + summary.version),
+						h("span", { className: "dse-chip", title: "agent 通过 skill 工具加载该技能的次数" }, (summary.invocations || 0) + " 次调用"),
+						h("span", { className: "dse-chip", title: "最近更新：" + fmtTime(summary.updatedAt) }, "update:" + fmtShortTime(summary.updatedAt)),
 						h(Chevron))),
 				open ? h("div", { className: "dse-cardBody" },
 					Array.isArray(summary.signals) && summary.signals.length > 0
