@@ -224,6 +224,7 @@ window.__ModuleLoader__.load({
 		function ModelConfig({ config, onChanged }) {
 			const [provider, setProvider] = useState(config.llmProvider || "");
 			const [model, setModel] = useState(config.llmModel || "");
+			const [manualModel, setManualModel] = useState(false);
 			const [catalog, setCatalog] = useState(undefined);
 			const [busy, setBusy] = useState(false);
 			const [message, setMessage] = useState(undefined);
@@ -238,8 +239,32 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			const providers = catalog && Array.isArray(catalog.providers) ? catalog.providers : [];
-			const modelOptions = catalog && catalog.modelsByProvider ? (catalog.modelsByProvider[provider] || []) : [];
+			const optionsOf = (id) => (catalog && catalog.modelsByProvider ? (catalog.modelsByProvider[id] || []) : []);
+			const modelOptions = optionsOf(provider);
 			const dirty = provider !== (config.llmProvider || "") || model !== (config.llmModel || "");
+
+			// Switching provider re-anchors the model to that provider's own
+			// catalog: the old model id belongs to the old route, so an input
+			// left as-is would also filter the datalist down to nothing.
+			const onProviderChange = useCallback((next) => {
+				setProvider(next);
+				const options = optionsOf(next);
+				if (options.length > 0) {
+					setManualModel(false);
+					if (!options.some((m) => m.id === model)) setModel(options[0].id);
+				} else {
+					setManualModel(true);
+				}
+			}, [catalog, model]);
+
+			const onModelPick = useCallback((value) => {
+				if (value === "__manual__") {
+					setManualModel(true);
+					setModel("");
+					return;
+				}
+				setModel(value);
+			}, []);
 
 			const save = useCallback(() => {
 				if (!provider.trim() || !model.trim()) {
@@ -267,16 +292,23 @@ window.__ModuleLoader__.load({
 					h("label", { className: "dse-modelField" },
 						h("span", {}, "Provider"),
 						providers.length > 0
-							? h("select", { className: "dse-select", value: provider, onChange: (e) => setProvider(e.target.value) },
+							? h("select", { className: "dse-select", value: provider, onChange: (e) => onProviderChange(e.target.value) },
 								providers.some((p) => p.id === provider) ? null : h("option", { value: provider }, provider),
 								providers.map((p) => h("option", { key: p.id, value: p.id }, p.name && p.name !== p.id ? p.name + " (" + p.id + ")" : p.id)))
 							: h("input", { className: "dse-input", value: provider, onChange: (e) => setProvider(e.target.value), placeholder: "provider id" })),
 					h("label", { className: "dse-modelField" },
 						h("span", {}, "Model"),
-						h("input", { className: "dse-input", list: "dse-model-options", value: model, onChange: (e) => setModel(e.target.value), placeholder: "model id" }),
-						h("datalist", { id: "dse-model-options" }, modelOptions.map((m) => h("option", { key: m.id, value: m.id })))),
+						modelOptions.length > 0 && !manualModel
+							? h("select", { className: "dse-select", value: modelOptions.some((m) => m.id === model) || model ? model : "__manual__", onChange: (e) => onModelPick(e.target.value) },
+								model && !modelOptions.some((m) => m.id === model) ? h("option", { value: model }, model + "（当前值）") : null,
+								modelOptions.map((m) => h("option", { key: m.id, value: m.id }, m.name && m.name !== m.id ? m.name + " (" + m.id + ")" : m.id)),
+								h("option", { value: "__manual__" }, "手动输入 model id…"))
+							: h("input", { className: "dse-input", value: model, onChange: (e) => setModel(e.target.value), placeholder: "model id" })),
 					h("div", { className: "dse-modelActions" },
 						h("button", { type: "button", className: "dse-btn", "data-primary": true, disabled: busy || !dirty, onClick: save }, busy ? "保存中…" : "保存"),
+						manualModel && modelOptions.length > 0
+							? h("button", { type: "button", className: "dse-btn", disabled: busy, onClick: () => { setManualModel(false); setModel(modelOptions[0].id); } }, "回到目录")
+							: null,
 						overridden ? h("button", { type: "button", className: "dse-btn", disabled: busy, onClick: reset }, "恢复默认") : null)),
 				message
 					? h("p", { className: message.ok ? "dse-modelSaved" : "dse-failure" }, message.text)

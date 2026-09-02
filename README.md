@@ -104,7 +104,7 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 
 ### 在 UI 里改评审模型
 
-设置 → 技能进化 面板内置**评审模型**编辑器：Provider 下拉列出本部署所有已注册的 LLM provider（来自 `ctx.llm.listProviders()`），Model 输入框带各 provider 模型目录的自动补全。保存后立即生效，并持久化到插件目录的 `runtime-config.json`（优先于挂载配置，重启后仍生效）；「恢复默认」按钮删除该文件、回落到挂载配置的 `llmProvider`/`llmModel`。
+设置 → 技能进化 面板内置**评审模型**编辑器：Provider 下拉列出本部署所有已注册的 LLM provider（来自 `ctx.llm.listProviders()`），Model 下拉跟随所选 provider 的模型目录（`ctx.llm.listModels(provider)`）级联刷新，切换 provider 会自动落到该目录的首个模型；目录是 advisory 的，末尾的「手动输入 model id…」可切回自由输入填目录外模型。保存后立即生效，并持久化到插件目录的 `runtime-config.json`（优先于挂载配置，重启后仍生效）；「恢复默认」按钮删除该文件、回落到挂载配置的 `llmProvider`/`llmModel`。
 
 不想用 UI 也可以走配置层：在 `~/.dsh/profiles/<profile>/cordis.patch.yml`（或 `~/.dsh/cordis.patch.yml`）追加一条覆盖行——不带 `insert`、按 `id` 命中已挂载条目：
 
