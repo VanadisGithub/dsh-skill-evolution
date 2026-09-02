@@ -87,6 +87,8 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 
 ## 配置
 
+下表所有键都**既走挂载配置，也可在设置面板里直接修改**（面板改动持久化到插件目录 `runtime-config.json`，优先于挂载配置，重启后仍生效）。
+
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `minTraceSteps` | `3` | 轨迹最小步数（噪音地板） |
@@ -96,18 +98,30 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 | `signals` | 全开 | `{complex, recovered, repeated}` 分别开关 |
 | `complexRequiresCorroboration` | `true` | 单独 `complex` 信号需叠加 `recovered`/`repeated` 佐证才送评审 |
 | `autoRegister` | `true` | 结晶后自动注册进技能目录 |
-| `llmProvider` / `llmModel` | `deepseek` / `deepseek-chat` | 评审用的模型（必须是部署中存在的 provider）。**也可直接在设置面板里修改**，见下方说明 |
-| `skillLanguage` | `en` | 生成技能的语言：`zh`（中文）或 `en`（英文）。NAME 与 SKILL.md 章节标题恒为英文，正文与 DESCRIPTION 跟随该语言。**也可直接在设置面板里修改** |
+| `llmProvider` / `llmModel` | `deepseek` / `deepseek-chat` | 评审用的模型（必须是部署中存在的 provider） |
+| `skillLanguage` | `en` | 生成技能的语言：`zh`（中文）或 `en`（英文）。NAME 与 SKILL.md 章节标题恒为英文，正文与 DESCRIPTION 跟随该语言 |
 | `maxEvolvedSkills` | `20` | 进化技能容量上限 |
 | `improvementEvery` | `3` | 每 N 次同序列重跑触发一次改进评审 |
 | `maxImprovementsPerProcess` | `5` | 每进程每技能改进次数上限 |
 | `maxEvidenceSteps` | `30` | 送评审的最大步骤数 |
+| `maxStepTextLength` | `200` | 每步参数/结果摘要截断长度 |
+| `maxTracesPerSession` | `50` | 每会话保留的轨迹条数 |
+
+结晶与改进评审的**系统提示词**同样可在面板里自定义（见下），不属于挂载配置键。
 
 ### 在 UI 里改评审模型
 
-设置 → 技能进化 面板内置**评审模型**编辑器：Provider 下拉列出本部署所有已注册的 LLM provider（来自 `ctx.llm.listProviders()`），Model 下拉跟随所选 provider 的模型目录（`ctx.llm.listModels(provider)`）级联刷新，切换 provider 会自动落到该目录的首个模型；目录是 advisory 的，末尾的「手动输入 model id…」可切回自由输入填目录外模型。保存后立即生效，并持久化到插件目录的 `runtime-config.json`（优先于挂载配置，重启后仍生效）；「恢复默认」按钮删除该文件、回落到挂载配置的 `llmProvider`/`llmModel`（若你在界面里选过生成语言，只写回语言键，语言不会跟着模型一起被重置）。
+设置 → 技能进化 面板内置**评审模型**编辑器：Provider 下拉列出本部署所有已注册的 LLM provider（来自 `ctx.llm.listProviders()`），Model 下拉跟随所选 provider 的模型目录（`ctx.llm.listModels(provider)`）级联刷新，切换 provider 会自动落到该目录的首个模型；目录是 advisory 的，末尾的「手动输入 model id…」可切回自由输入填目录外模型。保存后立即生效，并持久化到插件目录的 `runtime-config.json`（优先于挂载配置，重启后仍生效）；「恢复默认」按钮回落到挂载配置的 `llmProvider`/`llmModel`，其余运行时覆盖（语言、阈值、提示词）原样保留。
 
 同一行还有**生成语言**下拉（中文 / English）：改动即存，下次结晶与改进评审立刻按该语言输出，同样持久化在 `runtime-config.json`。它只影响**新生成和新改进**的技能，已结晶的技能不会被追溯改写。
+
+### 在 UI 里改阈值与提示词
+
+**阈值与控制**面板：上表全部数值阈值（输入框带合法区间）加五个开关（三个信号、complex 佐证闸门、自动注册）。草稿-保存模式——「保存改动」只提交实际改动的键并立即生效，「放弃改动」回到当前生效值，「恢复默认」一键回到挂载配置基线。面板标题会标出已定制的键。
+
+**评审提示词**面板：结晶评审与改进评审两段系统提示词，textarea 编辑、保存即生效；语言指令由服务端按「生成语言」自动追加，自定义提示词里无需重复声明。留空保存即恢复内置默认。
+
+所有 UI 覆盖统一持久化在 `runtime-config.json`（单一写入器：仍存在的覆盖保留，全部清空时删除文件），重启自动恢复。
 
 不想用 UI 也可以走配置层：在 `~/.dsh/profiles/<profile>/cordis.patch.yml`（或 `~/.dsh/cordis.patch.yml`）追加一条覆盖行——不带 `insert`、按 `id` 命中已挂载条目：
 
@@ -128,6 +142,8 @@ git clone https://github.com/VanadisGithub/dsh-skill-evolution.git ~/Code/dsh-sk
 - 配置与信号开关一览、实时模式统计（各序列出现次数/成功率/是否结晶）
 - **评审模型编辑器**：改 provider/model、保存持久化、一键恢复默认
 - **生成语言下拉**：中文 / English，改动即存并持久化，下次评审即生效
+- **阈值与控制**：全部数值阈值 + 信号/闸门/自动注册开关，草稿-保存，一键恢复默认
+- **评审提示词**：结晶与改进两段系统提示词可自定义，留空保存即恢复内置默认
 - 技能卡片：结晶信号、工具序列、版本与改进次数；展开查看完整 SKILL.md
 - 单个删除 / 清空全部（均为两步确认）；删除会同时反注册并删除磁盘文件
 

@@ -72,6 +72,21 @@ window.__ModuleLoader__.load({
 .dse-patterns summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12.5px;user-select:none}
 .dse-patternRow{align-items:center;gap:8px;flex-wrap:wrap;display:flex;font-size:11.5px;color:var(--dsw-alias-label-tertiary)}
 .dse-patternRow .dse-chip[data-kind=tool]{font-size:10.5px}
+.dse-panel{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:10px;flex-direction:column;gap:10px;padding:10px 14px;display:flex}
+.dse-panel>summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12.5px;font-weight:500;user-select:none}
+.dse-panelNote{color:var(--dsw-alias-label-tertiary);margin:0;font-size:11px;line-height:16px}
+.dse-grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px 10px;display:grid}
+.dse-field{flex-direction:column;gap:3px;display:flex}
+.dse-field>span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px}
+.dse-field input[type=number]{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);height:30px;font:inherit;font-size:13px;border-radius:6px;padding:0 8px;width:100%}
+.dse-field input[type=number]:focus{border-color:var(--dsw-alias-brand-primary);outline:none}
+.dse-toggles{flex-wrap:wrap;gap:6px 14px;display:flex}
+.dse-toggle{align-items:center;gap:5px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:12px;display:inline-flex}
+.dse-promptBlock{flex-direction:column;gap:4px;display:flex}
+.dse-promptBlock>span{color:var(--dsw-alias-label-tertiary);font-size:11px}
+.dse-textarea{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);white-space:pre;overflow:auto;border-radius:8px;font-family:var(--ds-font-family-code);font-size:11.5px;line-height:17px;min-height:150px;padding:8px 10px;resize:vertical;width:100%}
+.dse-textarea:focus{border-color:var(--dsw-alias-brand-primary);outline:none}
+.dse-panelActions{justify-content:flex-end;gap:8px;display:flex}
 @media (width<=680px){.dse-head{flex-direction:column}}
 `;
 
@@ -337,6 +352,162 @@ window.__ModuleLoader__.load({
 						: h("p", { className: "dse-modelHint" }, "当前值来自挂载配置；在此保存后将持久化覆盖，重启后仍生效"));
 		}
 
+		const NUM_TUNABLES = [
+			["minToolCalls", "complex 阈值：工具调用数"],
+			["minPatternOccurrences", "repeated 阈值：序列出现次数"],
+			["minSuccessRate", "repeated 成功率下限（0-1）"],
+			["minTraceSteps", "轨迹最小步数"],
+			["maxEvidenceSteps", "送评审的最大步骤数"],
+			["improvementEvery", "每 N 次同序列跑一次改进评审"],
+			["maxImprovementsPerProcess", "每进程每技能改进次数上限"],
+			["maxEvolvedSkills", "进化技能容量上限"],
+			["maxStepTextLength", "每步文本截断长度"],
+			["maxTracesPerSession", "每会话保留轨迹数"],
+		];
+
+		const BOOL_TUNABLES = [
+			["signals.complex", "信号：complex（复杂任务）"],
+			["signals.recovered", "信号：recovered（错误恢复）"],
+			["signals.repeated", "信号：repeated（序列重复）"],
+			["complexRequiresCorroboration", "闸门：单独 complex 需佐证"],
+			["autoRegister", "结晶后自动注册进技能目录"],
+		];
+
+		function TuningPanel({ config, onChanged }) {
+			const defaults = config.defaults || {};
+			const bounds = config.tuningBounds || {};
+			const snapshotOf = useCallback(() => ({
+				numbers: Object.fromEntries(NUM_TUNABLES.map(([key]) => [key, config[key]])),
+				bools: Object.fromEntries(BOOL_TUNABLES.map(([key]) => [key, key.startsWith("signals.") ? !!(config.signals && config.signals[key.slice(8)]) : !!config[key]])),
+			}), [config]);
+			const [draft, setDraft] = useState(snapshotOf);
+			const [busy, setBusy] = useState(false);
+			const [message, setMessage] = useState(undefined);
+			useEffect(() => { setDraft(snapshotOf()); setMessage(undefined); }, [snapshotOf]);
+
+			const overriddenKeys = Object.keys(config.tuningOverrides || {});
+			const overridden = overriddenKeys.length > 0;
+			const dirty = NUM_TUNABLES.some(([key]) => String(draft.numbers[key]) !== String(config[key]))
+				|| BOOL_TUNABLES.some(([key]) => draft.bools[key] !== (key.startsWith("signals.") ? !!(config.signals && config.signals[key.slice(8)]) : !!config[key]));
+
+			const rangeOf = (key) => {
+				const ints = bounds.ints || {};
+				const rates = bounds.rates || {};
+				if (ints[key]) return ints[key];
+				if (rates[key]) return rates[key];
+				return undefined;
+			};
+
+			const save = useCallback(() => {
+				const patch = {};
+				for (const [key] of NUM_TUNABLES) {
+					const parsed = Number(draft.numbers[key]);
+					if (!Number.isFinite(parsed)) { setMessage({ ok: false, text: key + " 必须是数字" }); return; }
+					if (parsed !== config[key]) patch[key] = parsed;
+				}
+				const signals = {};
+				let hasSignalPatch = false;
+				for (const [key] of BOOL_TUNABLES) {
+					const current = key.startsWith("signals.") ? !!(config.signals && config.signals[key.slice(8)]) : !!config[key];
+					if (draft.bools[key] !== current) {
+						if (key.startsWith("signals.")) { signals[key.slice(8)] = draft.bools[key]; hasSignalPatch = true; }
+						else patch[key] = draft.bools[key];
+					}
+				}
+				if (hasSignalPatch) patch.signals = signals;
+				if (Object.keys(patch).length === 0) { setMessage({ ok: false, text: "没有改动" }); return; }
+				setBusy(true);
+				setMessage(undefined);
+				rpc("setTuning", { tuning: patch })
+					.then(() => { setBusy(false); setMessage({ ok: true, text: "已保存并持久化，立即生效" }); onChanged(); })
+					.catch((e) => { setBusy(false); setMessage({ ok: false, text: String(e.message || e) }); });
+			}, [draft, config, onChanged]);
+
+			const reset = useCallback(() => {
+				setBusy(true);
+				setMessage(undefined);
+				rpc("resetTuning")
+					.then(() => { setBusy(false); setMessage({ ok: true, text: "已恢复挂载配置的默认值" }); onChanged(); })
+					.catch((e) => { setBusy(false); setMessage({ ok: false, text: String(e.message || e) }); });
+			}, [onChanged]);
+
+			return h("details", { className: "dse-panel" },
+				h("summary", {}, "阈值与控制" + (overridden ? "（已定制：" + overriddenKeys.join("、") + "）" : "")),
+				h("div", { className: "dse-grid" },
+					NUM_TUNABLES.map(([key, label]) => {
+						const range = rangeOf(key);
+						return h("label", { key, className: "dse-field" },
+							h("span", {}, label),
+							h("input", {
+								type: "number",
+								value: draft.numbers[key],
+								step: key === "minSuccessRate" ? "0.05" : "1",
+								min: range ? range[0] : undefined,
+								max: range ? range[1] : undefined,
+								onChange: (e) => setDraft({ ...draft, numbers: { ...draft.numbers, [key]: e.target.value } }),
+							}));
+					})),
+				h("div", { className: "dse-toggles" },
+					BOOL_TUNABLES.map(([key, label]) => h("label", { key, className: "dse-toggle" },
+						h("input", {
+							type: "checkbox",
+							checked: !!draft.bools[key],
+							onChange: (e) => setDraft({ ...draft, bools: { ...draft.bools, [key]: e.target.checked } }),
+						}),
+						h("span", {}, label)))),
+				message ? h("p", { className: message.ok ? "dse-modelSaved" : "dse-failure" }, message.text) : null,
+				h("div", { className: "dse-panelActions" },
+					h("button", { type: "button", className: "dse-btn", "data-primary": true, disabled: busy || !dirty, onClick: save }, busy ? "保存中…" : "保存改动"),
+					h("button", { type: "button", className: "dse-btn", disabled: busy || !dirty, onClick: () => setDraft(snapshotOf()) }, "放弃改动"),
+					overridden ? h("button", { type: "button", className: "dse-btn", disabled: busy, onClick: reset }, "恢复默认") : null));
+		}
+
+		function PromptsPanel({ config, onChanged }) {
+			const prompts = config.prompts || {};
+			const [draft, setDraft] = useState({ review: prompts.review || "", improve: prompts.improve || "" });
+			const [busy, setBusy] = useState(false);
+			const [message, setMessage] = useState(undefined);
+			useEffect(() => {
+				setDraft({ review: prompts.review || "", improve: prompts.improve || "" });
+				setMessage(undefined);
+			}, [prompts.review, prompts.improve]);
+
+			const saveRole = useCallback((role) => {
+				setBusy(true);
+				setMessage(undefined);
+				rpc("setPrompt", { role, text: draft[role] })
+					.then(() => { setBusy(false); setMessage({ ok: true, text: (role === "review" ? "结晶评审提示词" : "改进评审提示词") + "已保存并持久化，下次评审即生效" }); onChanged(); })
+					.catch((e) => { setBusy(false); setMessage({ ok: false, text: String(e.message || e) }); });
+			}, [draft, onChanged]);
+
+			const resetRole = useCallback((role) => {
+				setBusy(true);
+				setMessage(undefined);
+				rpc("setPrompt", { role, text: "" })
+					.then(() => { setBusy(false); setMessage({ ok: true, text: "已恢复内置默认提示词" }); onChanged(); })
+					.catch((e) => { setBusy(false); setMessage({ ok: false, text: String(e.message || e) }); });
+			}, [onChanged]);
+
+			const block = (role, label, overriddenFlag) => h("div", { key: role, className: "dse-promptBlock" },
+				h("span", {}, label + (overriddenFlag ? "（已自定义）" : "（内置默认）")),
+				h("textarea", {
+					className: "dse-textarea",
+					value: draft[role],
+					spellCheck: false,
+					onChange: (e) => setDraft({ ...draft, [role]: e.target.value }),
+				}),
+				h("div", { className: "dse-panelActions" },
+					h("button", { type: "button", className: "dse-btn", "data-primary": true, disabled: busy || draft[role] === (prompts[role] || ""), onClick: () => saveRole(role) }, "保存"),
+					overriddenFlag ? h("button", { type: "button", className: "dse-btn", disabled: busy, onClick: () => resetRole(role) }, "恢复默认") : null));
+
+			return h("details", { className: "dse-panel" },
+				h("summary", {}, "评审提示词" + ((prompts.reviewOverridden || prompts.improveOverridden) ? "（已自定义）" : "")),
+				h("p", { className: "dse-panelNote" }, "两段提示词分别驱动结晶评审和改进评审；语言指令由上方「生成语言」自动附加，无需在此重复声明。留空保存即恢复内置默认。"),
+				block("review", "结晶评审提示词", !!prompts.reviewOverridden),
+				block("improve", "改进评审提示词", !!prompts.improveOverridden),
+				message ? h("p", { className: message.ok ? "dse-modelSaved" : "dse-failure" }, message.text) : null);
+		}
+
 		function SkillEvolutionSection() {
 			const [view, setView] = useState({ status: "loading" });
 			const [confirmClear, setConfirmClear] = useState(false);
@@ -405,6 +576,8 @@ window.__ModuleLoader__.load({
 						h("span", { className: "dse-chip" }, "生成语言：" + (config.skillLanguage === "zh" ? "中文" : "English")),
 						h("span", { className: "dse-chip" }, "容量：" + skills.length + "/" + config.maxEvolvedSkills)),
 					h(ModelConfig, { config, onChanged: load }),
+					h(TuningPanel, { config, onChanged: load }),
+					h(PromptsPanel, { config, onChanged: load }),
 					h(PatternList, { stats, config }),
 					h("div", { className: "dse-catalog" },
 						h("div", { className: "dse-catalogHeading" },

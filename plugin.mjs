@@ -60,6 +60,23 @@ const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const GENERATED_DIR = join(PLUGIN_DIR, 'generated')
 const RUNTIME_CONFIG_FILE = join(PLUGIN_DIR, 'runtime-config.json')
 const RPC_CHANNEL = '/skill-evolution'
+const MAX_PROMPT_LENGTH = 8000
+
+/** Tunables the Settings UI may change at runtime: key -> inclusive bounds. */
+const INT_TUNABLES = {
+  minTraceSteps: [1, 50],
+  minToolCalls: [1, 100],
+  minPatternOccurrences: [1, 100],
+  maxTracesPerSession: [1, 500],
+  maxStepTextLength: [20, 5000],
+  maxEvolvedSkills: [1, 200],
+  maxEvidenceSteps: [1, 200],
+  improvementEvery: [1, 100],
+  maxImprovementsPerProcess: [0, 100],
+}
+const RATE_TUNABLES = { minSuccessRate: [0, 1] }
+const BOOL_TUNABLES = ['autoRegister', 'complexRequiresCorroboration']
+const SIGNAL_KEYS = ['complex', 'recovered', 'repeated']
 
 export const name = 'skill-evolution'
 export const inject = ['skills', 'llm', 'connection']
@@ -82,24 +99,44 @@ function fail(code, message) {
  * @param {object} [config] - optional configuration overrides.
  */
 export function apply(ctx, config = {}) {
-  const minTraceSteps = config.minTraceSteps ?? DEFAULT_MIN_TRACE_STEPS
-  const minToolCalls = config.minToolCalls ?? DEFAULT_MIN_TOOL_CALLS
-  const minPatternOccurrences = config.minPatternOccurrences ?? DEFAULT_MIN_PATTERN_OCCURRENCES
-  const minSuccessRate = config.minSuccessRate ?? DEFAULT_MIN_SUCCESS_RATE
-  const maxTracesPerSession = config.maxTracesPerSession ?? DEFAULT_MAX_TRACES_PER_SESSION
-  const maxStepTextLength = config.maxStepTextLength ?? DEFAULT_MAX_STEP_TEXT_LENGTH
-  const maxEvolvedSkills = config.maxEvolvedSkills ?? DEFAULT_MAX_EVOLVED_SKILLS
-  const maxEvidenceSteps = config.maxEvidenceSteps ?? DEFAULT_MAX_EVIDENCE_STEPS
-  const improvementEvery = config.improvementEvery ?? DEFAULT_IMPROVEMENT_EVERY
-  const maxImprovementsPerProcess = config.maxImprovementsPerProcess ?? DEFAULT_MAX_IMPROVEMENTS_PER_PROCESS
-  const complexRequiresCorroboration = config.complexRequiresCorroboration ?? DEFAULT_COMPLEX_REQUIRES_CORROBORATION
+  // Mount-config baseline for every tunable. The Settings UI may override
+  // each one at runtime (persisted in runtime-config.json, reloaded on the
+  // next apply), so the live values below are mutable.
   const signalsConfig = safeRecord(config.signals) ?? {}
-  const signalEnabled = {
-    complex: signalsConfig.complex ?? true,
-    recovered: signalsConfig.recovered ?? true,
-    repeated: signalsConfig.repeated ?? true,
+  const tuningDefaults = {
+    minTraceSteps: config.minTraceSteps ?? DEFAULT_MIN_TRACE_STEPS,
+    minToolCalls: config.minToolCalls ?? DEFAULT_MIN_TOOL_CALLS,
+    minPatternOccurrences: config.minPatternOccurrences ?? DEFAULT_MIN_PATTERN_OCCURRENCES,
+    minSuccessRate: config.minSuccessRate ?? DEFAULT_MIN_SUCCESS_RATE,
+    maxTracesPerSession: config.maxTracesPerSession ?? DEFAULT_MAX_TRACES_PER_SESSION,
+    maxStepTextLength: config.maxStepTextLength ?? DEFAULT_MAX_STEP_TEXT_LENGTH,
+    maxEvolvedSkills: config.maxEvolvedSkills ?? DEFAULT_MAX_EVOLVED_SKILLS,
+    maxEvidenceSteps: config.maxEvidenceSteps ?? DEFAULT_MAX_EVIDENCE_STEPS,
+    improvementEvery: config.improvementEvery ?? DEFAULT_IMPROVEMENT_EVERY,
+    maxImprovementsPerProcess: config.maxImprovementsPerProcess ?? DEFAULT_MAX_IMPROVEMENTS_PER_PROCESS,
+    complexRequiresCorroboration: config.complexRequiresCorroboration ?? DEFAULT_COMPLEX_REQUIRES_CORROBORATION,
+    autoRegister: config.autoRegister ?? true,
+    signals: {
+      complex: signalsConfig.complex ?? true,
+      recovered: signalsConfig.recovered ?? true,
+      repeated: signalsConfig.repeated ?? true,
+    },
   }
-  const autoRegister = config.autoRegister ?? true
+  let minTraceSteps = tuningDefaults.minTraceSteps
+  let minToolCalls = tuningDefaults.minToolCalls
+  let minPatternOccurrences = tuningDefaults.minPatternOccurrences
+  let minSuccessRate = tuningDefaults.minSuccessRate
+  let maxTracesPerSession = tuningDefaults.maxTracesPerSession
+  let maxStepTextLength = tuningDefaults.maxStepTextLength
+  let maxEvolvedSkills = tuningDefaults.maxEvolvedSkills
+  let maxEvidenceSteps = tuningDefaults.maxEvidenceSteps
+  let improvementEvery = tuningDefaults.improvementEvery
+  let maxImprovementsPerProcess = tuningDefaults.maxImprovementsPerProcess
+  let complexRequiresCorroboration = tuningDefaults.complexRequiresCorroboration
+  let autoRegister = tuningDefaults.autoRegister
+  const signalEnabled = { ...tuningDefaults.signals }
+  /** normalized runtime tuning overrides (persisted verbatim) */
+  const tuningOverrides = {}
   // Reviewer model: patch-config baseline, overridable at runtime from the
   // Settings UI (persisted in runtime-config.json, reloaded on next apply).
   let llmProvider = config.llmProvider ?? 'deepseek'
@@ -109,6 +146,8 @@ export function apply(ctx, config = {}) {
   // as the reviewer model.
   const configSkillLanguage = SKILL_LANGUAGES.includes(config.skillLanguage) ? config.skillLanguage : DEFAULT_SKILL_LANGUAGE
   let skillLanguage = configSkillLanguage
+  // Review-prompt overrides: undefined means "use the built-in default".
+  const promptOverrides = { review: undefined, improve: undefined }
 
   /** @type {Map<string, {sessionId: string, startedAt: string, steps: Array, callIdToTool: Map, intent: string}>} */
   const activeTraces = new Map()
@@ -165,8 +204,95 @@ export function apply(ctx, config = {}) {
   }
 
   // ------------------------------------------------------------------
-  // Runtime model config (Settings-UI editable, survives restarts)
+  // Runtime config (Settings-UI editable, survives restarts)
   // ------------------------------------------------------------------
+
+  /** Validate a tuning patch; @returns normalized `{values, signals}`. */
+  function validateTuningPatch(patch) {
+    const rec = safeRecord(patch)
+    if (!rec || Object.keys(rec).length === 0) throw new Error('tuning must be a non-empty object')
+    const values = {}
+    const signals = {}
+    for (const [key, value] of Object.entries(rec)) {
+      if (key === 'signals') {
+        const signalsRec = safeRecord(value)
+        if (!signalsRec) throw new Error('signals must be an object')
+        for (const [signalKey, enabled] of Object.entries(signalsRec)) {
+          if (!SIGNAL_KEYS.includes(signalKey)) throw new Error(`unknown signal ${JSON.stringify(signalKey)}`)
+          if (typeof enabled !== 'boolean') throw new Error(`signals.${signalKey} must be a boolean`)
+          signals[signalKey] = enabled
+        }
+        continue
+      }
+      if (Object.hasOwn(INT_TUNABLES, key)) {
+        if (!Number.isSafeInteger(value)) throw new Error(`${key} must be an integer`)
+        const [low, high] = INT_TUNABLES[key]
+        if (value < low || value > high) throw new Error(`${key} must be between ${low} and ${high}`)
+        values[key] = value
+        continue
+      }
+      if (Object.hasOwn(RATE_TUNABLES, key)) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${key} must be a number`)
+        const [low, high] = RATE_TUNABLES[key]
+        if (value < low || value > high) throw new Error(`${key} must be between ${low} and ${high}`)
+        values[key] = value
+        continue
+      }
+      if (BOOL_TUNABLES.includes(key)) {
+        if (typeof value !== 'boolean') throw new Error(`${key} must be a boolean`)
+        values[key] = value
+        continue
+      }
+      throw new Error(`unknown tuning key ${JSON.stringify(key)}`)
+    }
+    return { values, signals }
+  }
+
+  /** Apply a validated tuning patch to the live values and the override ledger. */
+  function applyTuningPatch(patch) {
+    const { values, signals } = validateTuningPatch(patch)
+    for (const [key, value] of Object.entries(values)) {
+      switch (key) {
+        case 'minTraceSteps': minTraceSteps = value; break
+        case 'minToolCalls': minToolCalls = value; break
+        case 'minPatternOccurrences': minPatternOccurrences = value; break
+        case 'minSuccessRate': minSuccessRate = value; break
+        case 'maxTracesPerSession': maxTracesPerSession = value; break
+        case 'maxStepTextLength': maxStepTextLength = value; break
+        case 'maxEvolvedSkills': maxEvolvedSkills = value; break
+        case 'maxEvidenceSteps': maxEvidenceSteps = value; break
+        case 'improvementEvery': improvementEvery = value; break
+        case 'maxImprovementsPerProcess': maxImprovementsPerProcess = value; break
+        case 'complexRequiresCorroboration': complexRequiresCorroboration = value; break
+        case 'autoRegister': autoRegister = value; break
+      }
+      tuningOverrides[key] = value
+    }
+    for (const [signalKey, enabled] of Object.entries(signals)) {
+      signalEnabled[signalKey] = enabled
+      tuningOverrides.signals = { ...(tuningOverrides.signals ?? {}), [signalKey]: enabled }
+    }
+  }
+
+  /** Drop every runtime tuning override and restore the mount-config baseline. */
+  function resetTuning() {
+    for (const key of Object.keys(tuningOverrides)) delete tuningOverrides[key]
+    minTraceSteps = tuningDefaults.minTraceSteps
+    minToolCalls = tuningDefaults.minToolCalls
+    minPatternOccurrences = tuningDefaults.minPatternOccurrences
+    minSuccessRate = tuningDefaults.minSuccessRate
+    maxTracesPerSession = tuningDefaults.maxTracesPerSession
+    maxStepTextLength = tuningDefaults.maxStepTextLength
+    maxEvolvedSkills = tuningDefaults.maxEvolvedSkills
+    maxEvidenceSteps = tuningDefaults.maxEvidenceSteps
+    improvementEvery = tuningDefaults.improvementEvery
+    maxImprovementsPerProcess = tuningDefaults.maxImprovementsPerProcess
+    complexRequiresCorroboration = tuningDefaults.complexRequiresCorroboration
+    autoRegister = tuningDefaults.autoRegister
+    signalEnabled.complex = tuningDefaults.signals.complex
+    signalEnabled.recovered = tuningDefaults.signals.recovered
+    signalEnabled.repeated = tuningDefaults.signals.repeated
+  }
 
   function loadRuntimeConfig() {
     try {
@@ -184,32 +310,56 @@ export function apply(ctx, config = {}) {
       }
       if (modelFromRuntime) modelSource = 'runtime'
       if (SKILL_LANGUAGES.includes(rec.skillLanguage)) skillLanguage = rec.skillLanguage
+      if (safeRecord(rec.tuning)) {
+        try {
+          applyTuningPatch(rec.tuning)
+        } catch (error) {
+          ctx.logger.warn(`skill-evolution: ignoring invalid persisted tuning: ${String(error)}`)
+        }
+      }
+      const prompts = safeRecord(rec.prompts)
+      if (prompts) {
+        if (typeof prompts.review === 'string' && prompts.review.trim()) promptOverrides.review = prompts.review.slice(0, MAX_PROMPT_LENGTH)
+        if (typeof prompts.improve === 'string' && prompts.improve.trim()) promptOverrides.improve = prompts.improve.slice(0, MAX_PROMPT_LENGTH)
+      }
     } catch (error) {
       ctx.logger.warn(`skill-evolution: ignoring unreadable runtime-config.json: ${String(error)}`)
     }
   }
 
-  function persistRuntimeConfig() {
-    try {
-      const tmp = `${RUNTIME_CONFIG_FILE}.tmp`
-      writeFileSync(tmp, JSON.stringify({ llmProvider, llmModel, skillLanguage }, null, 2))
-      renameSync(tmp, RUNTIME_CONFIG_FILE)
-    } catch (error) {
-      ctx.logger.warn(`skill-evolution: failed to persist runtime model config: ${String(error)}`)
+  /** Snapshot every runtime override that differs from the mount-config baseline. */
+  function runtimeOverridesRecord() {
+    const rec = {}
+    if (modelSource === 'runtime') {
+      rec.llmProvider = llmProvider
+      rec.llmModel = llmModel
     }
+    if (skillLanguage !== configSkillLanguage) rec.skillLanguage = skillLanguage
+    if (Object.keys(tuningOverrides).length > 0) rec.tuning = JSON.parse(JSON.stringify(tuningOverrides))
+    const prompts = {}
+    if (promptOverrides.review !== undefined) prompts.review = promptOverrides.review
+    if (promptOverrides.improve !== undefined) prompts.improve = promptOverrides.improve
+    if (Object.keys(prompts).length > 0) rec.prompts = prompts
+    return rec
   }
 
   /**
-   * Write ONLY the skill-language override, so a model reset can drop the
-   * model keys without losing a language the user picked in the UI.
+   * Rewrite runtime-config.json from the live override state. A single writer
+   * keeps partial resets honest: whatever is still overridden stays, and an
+   * empty override set removes the file entirely.
    */
-  function persistRuntimeLanguageOnly() {
+  function persistRuntimeConfig() {
     try {
+      const rec = runtimeOverridesRecord()
+      if (Object.keys(rec).length === 0) {
+        if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+        return
+      }
       const tmp = `${RUNTIME_CONFIG_FILE}.tmp`
-      writeFileSync(tmp, JSON.stringify({ skillLanguage }, null, 2))
+      writeFileSync(tmp, JSON.stringify(rec, null, 2))
       renameSync(tmp, RUNTIME_CONFIG_FILE)
     } catch (error) {
-      ctx.logger.warn(`skill-evolution: failed to persist runtime language config: ${String(error)}`)
+      ctx.logger.warn(`skill-evolution: failed to persist runtime config: ${String(error)}`)
     }
   }
 
@@ -498,6 +648,14 @@ export function apply(ctx, config = {}) {
     '<the full updated SKILL.md body>',
   ].join('\n')
 
+  function effectiveReviewPrompt() {
+    return promptOverrides.review ?? REVIEW_SYSTEM_PROMPT
+  }
+
+  function effectiveImprovePrompt() {
+    return promptOverrides.improve ?? IMPROVE_SYSTEM_PROMPT
+  }
+
   function evidenceBlock(trace, pattern, signals) {
     const lines = []
     lines.push(`Fired signals: ${signals.join('; ')}`)
@@ -556,7 +714,7 @@ export function apply(ctx, config = {}) {
   async function reviewTraceForCrystallization(trace, pattern, signals, sequenceKey) {
     if (evolvedSkills.size >= maxEvolvedSkills) return
     const evidence = evidenceBlock(trace, pattern, signals)
-    const response = await callLlm(`${REVIEW_SYSTEM_PROMPT}\n\n${languageDirective()}`, evidence)
+    const response = await callLlm(`${effectiveReviewPrompt()}\n\n${languageDirective()}`, evidence)
     const review = parseReview(response)
     if (review.verdict !== 'save' || !review.content) {
       reviewedSequences.set(sequenceKey, { verdict: 'nothing', occurrencesAtReview: pattern.occurrences })
@@ -603,7 +761,7 @@ export function apply(ctx, config = {}) {
       'Existing skill content:',
       entry.record.content,
     ].join('\n')
-    const response = await callLlm(`${IMPROVE_SYSTEM_PROMPT}\n\n${languageDirective()}`, evidence)
+    const response = await callLlm(`${effectiveImprovePrompt()}\n\n${languageDirective()}`, evidence)
     const review = parseReview(response)
     if (review.verdict !== 'update' || !review.content) {
       ctx.logger.info(`skill-evolution: no new learning folded into "${skillName}"`)
@@ -704,14 +862,31 @@ export function apply(ctx, config = {}) {
       minToolCalls,
       minPatternOccurrences,
       minSuccessRate,
+      maxTracesPerSession,
+      maxStepTextLength,
       maxEvolvedSkills,
+      maxEvidenceSteps,
+      improvementEvery,
+      maxImprovementsPerProcess,
       signals: { ...signalEnabled },
       complexRequiresCorroboration,
       llmProvider,
       llmModel,
       modelSource,
       skillLanguage,
-      configDefaults: {
+      tuningOverrides: JSON.parse(JSON.stringify(tuningOverrides)),
+      tuningBounds: { ints: { ...INT_TUNABLES }, rates: { ...RATE_TUNABLES } },
+      prompts: {
+        review: effectiveReviewPrompt(),
+        improve: effectiveImprovePrompt(),
+        reviewDefault: REVIEW_SYSTEM_PROMPT,
+        improveDefault: IMPROVE_SYSTEM_PROMPT,
+        reviewOverridden: promptOverrides.review !== undefined,
+        improveOverridden: promptOverrides.improve !== undefined,
+        maxLength: MAX_PROMPT_LENGTH,
+      },
+      defaults: {
+        ...JSON.parse(JSON.stringify(tuningDefaults)),
         llmProvider: config.llmProvider ?? 'deepseek',
         llmModel: config.llmModel ?? 'deepseek-chat',
         skillLanguage: configSkillLanguage,
@@ -773,29 +948,43 @@ export function apply(ctx, config = {}) {
         llmProvider = config.llmProvider ?? 'deepseek'
         llmModel = config.llmModel ?? 'deepseek-chat'
         modelSource = 'config'
-        try {
-          // Keep a UI-picked language alive; only drop the file when nothing
-          // runtime-overridden remains.
-          if (skillLanguage !== configSkillLanguage) {
-            persistRuntimeLanguageOnly()
-          } else if (existsSync(RUNTIME_CONFIG_FILE)) {
-            unlinkSync(RUNTIME_CONFIG_FILE)
-          }
-        } catch (error) {
-          ctx.logger.warn(`skill-evolution: failed to remove runtime-config.json: ${String(error)}`)
-        }
+        persistRuntimeConfig()
         return ok({ llmProvider, llmModel, modelSource })
       }
       case 'setLanguage': {
         const language = typeof args.language === 'string' ? args.language.trim() : ''
         if (!SKILL_LANGUAGES.includes(language)) return fail('skill-evolution/bad-language', `language must be one of ${SKILL_LANGUAGES.join(', ')}`)
         skillLanguage = language
-        // Preserve an existing runtime model override; otherwise persist only
-        // the language so the model stays on the config baseline.
-        if (modelSource === 'runtime') persistRuntimeConfig()
-        else persistRuntimeLanguageOnly()
+        persistRuntimeConfig()
         ctx.logger.info(`skill-evolution: generated-skill language set to ${skillLanguage} (persisted)`)
         return ok({ skillLanguage })
+      }
+      case 'setTuning': {
+        try {
+          applyTuningPatch(args.tuning)
+        } catch (error) {
+          return fail('skill-evolution/bad-tuning', String(error instanceof Error ? error.message : error))
+        }
+        persistRuntimeConfig()
+        ctx.logger.info(`skill-evolution: tuning updated from the Settings UI (persisted): ${Object.keys(args.tuning).join(', ')}`)
+        return ok({ config: configSnapshot() })
+      }
+      case 'resetTuning': {
+        resetTuning()
+        persistRuntimeConfig()
+        ctx.logger.info('skill-evolution: tuning reset to the mount-config baseline')
+        return ok({ config: configSnapshot() })
+      }
+      case 'setPrompt': {
+        const role = args.role === 'review' || args.role === 'improve' ? args.role : ''
+        if (!role) return fail('skill-evolution/bad-role', 'role must be "review" or "improve"')
+        if (typeof args.text !== 'string') return fail('skill-evolution/bad-prompt', 'text must be a string')
+        const text = args.text.trim()
+        if (text.length > MAX_PROMPT_LENGTH) return fail('skill-evolution/bad-prompt', `prompt must be at most ${MAX_PROMPT_LENGTH} characters`)
+        promptOverrides[role] = text.length > 0 ? text : undefined
+        persistRuntimeConfig()
+        ctx.logger.info(`skill-evolution: ${role} prompt ${text.length > 0 ? 'customized' : 'reset to default'} (persisted)`)
+        return ok({ config: configSnapshot() })
       }
       case 'get': {
         if (typeof args.name !== 'string' || !SKILL_NAME_RE.test(args.name)) return fail('skill-evolution/bad-name', 'invalid skill name')

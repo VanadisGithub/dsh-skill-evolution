@@ -204,15 +204,97 @@ assert(!readdirSync(GENERATED_DIR).includes('smoke-test-workflow.json'), 'remove
     const bad = await langCtx._rpc('setLanguage', { args: { language: 'fr' } })
     assert(!bad.ok && bad.error.code === 'skill-evolution/bad-language', 'RPC setLanguage rejects unknown languages')
 
-    const setZh = await langCtx._rpc('setLanguage', { args: { language: 'zh' } })
-    assert(setZh.ok && setZh.value.skillLanguage === 'zh', 'RPC setLanguage accepts zh')
+    // mount config above sets skillLanguage 'zh', so 'en' is the override here
+    const setEn = await langCtx._rpc('setLanguage', { args: { language: 'en' } })
+    assert(setEn.ok && setEn.value.skillLanguage === 'en', 'RPC setLanguage accepts en')
     const persisted = existsSync(RUNTIME_CONFIG_FILE) ? JSON.parse(readFileSync(RUNTIME_CONFIG_FILE, 'utf8')) : {}
-    assert(persisted.skillLanguage === 'zh' && !('llmProvider' in persisted),
+    assert(persisted.skillLanguage === 'en' && !('llmProvider' in persisted),
       'language-only persistence keeps the model on the config baseline')
 
     const snapshot = await langCtx._rpc('list', { args: {} })
-    assert(snapshot.value.config.skillLanguage === 'zh' && snapshot.value.config.configDefaults.skillLanguage === 'zh',
+    assert(snapshot.value.config.skillLanguage === 'en' && snapshot.value.config.defaults.skillLanguage === 'zh',
       'config snapshot exposes skillLanguage and its config default')
+  } finally {
+    if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+  }
+}
+
+// --- runtime tuning & prompt overrides ------------------------------------
+{
+  if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
+  try {
+    let tuneLlmCalls = 0
+    let tuneSystem = ''
+    const tuneCtx = {
+      logger: { info: () => {}, warn: (m) => console.error(`[plugin warn] ${m}`) },
+      skills: { register: () => () => {} },
+      llm: { async *stream(options) { tuneLlmCalls++; tuneSystem = options?.system ?? ''; yield { type: 'text-delta', text: 'NOTHING_TO_SAVE' }; yield { type: 'finish', reason: { kind: 'completed' } } } },
+      connection: { rpc: { handle(_c, handler) { tuneCtx._rpc = handler } } },
+      _handlers: {},
+      on(event, fn) { tuneCtx._handlers[event] = fn },
+    }
+    apply(tuneCtx, { llmProvider: 'mock', llmModel: 'mock' })
+    const tuneSession = { id: 'tune-session' }
+    const tuneEmit = (type, data) => tuneCtx._handlers['session/event'](tuneSession, { type, data })
+    const replay = (steps, failures) => {
+      tuneEmit('user/message', { content: [{ type: 'text', text: 'tuning test' }] })
+      for (let i = 0; i < steps; i++) {
+        const fail = i < failures
+        tuneEmit('tool/call', { callId: `t${i}`, name: 'bash', arguments: '{}' })
+        tuneEmit('tool/result', {
+          callId: `t${i}`,
+          error: fail ? { message: 'boom' } : undefined,
+          message: { source: { callId: `t${i}` }, content: [{ content: [{ type: 'text', text: fail ? 'exit 1' : 'ok' }] }] },
+        })
+      }
+      tuneEmit('turn/end', { reason: { kind: 'completed' } })
+    }
+
+    const snap0 = await tuneCtx._rpc('list', { args: {} })
+    assert(snap0.value.config.defaults.minToolCalls === 5 && snap0.value.config.defaults.signals.repeated === true,
+      'config snapshot exposes tuning defaults')
+
+    const badType = await tuneCtx._rpc('setTuning', { args: { tuning: { minToolCalls: 'many' } } })
+    assert(!badType.ok && badType.error.code === 'skill-evolution/bad-tuning', 'setTuning rejects non-numeric thresholds')
+    const badRange = await tuneCtx._rpc('setTuning', { args: { tuning: { minSuccessRate: 1.5 } } })
+    assert(!badRange.ok && badRange.error.code === 'skill-evolution/bad-tuning', 'setTuning rejects out-of-range values')
+    const badKey = await tuneCtx._rpc('setTuning', { args: { tuning: { bogus: 1 } } })
+    assert(!badKey.ok && badKey.error.code === 'skill-evolution/bad-tuning', 'setTuning rejects unknown keys')
+
+    // 2-step turn is below the default floors (minTraceSteps 3, minToolCalls 5): no review
+    replay(2, 1)
+    await new Promise((r) => setTimeout(r, 200))
+    assert(tuneLlmCalls === 0, 'turn below default floors is not reviewed')
+
+    const setOk = await tuneCtx._rpc('setTuning', { args: { tuning: { minTraceSteps: 2, minToolCalls: 2, signals: { repeated: false } } } })
+    assert(setOk.ok && setOk.value.config.minToolCalls === 2 && setOk.value.config.signals.repeated === false,
+      'setTuning applies thresholds and signal toggles immediately')
+    const persistedTuning = existsSync(RUNTIME_CONFIG_FILE) ? JSON.parse(readFileSync(RUNTIME_CONFIG_FILE, 'utf8')) : {}
+    assert(persistedTuning.tuning && persistedTuning.tuning.minToolCalls === 2 && !('llmProvider' in persistedTuning),
+      'tuning persists without dragging the model off the config baseline')
+
+    // same 2-step turn now clears the lowered floors; recovered corroborates the gate
+    replay(2, 1)
+    await new Promise((r) => setTimeout(r, 200))
+    assert(tuneLlmCalls === 1, 'lowered thresholds take effect for subsequent turns')
+
+    const setPrompt = await tuneCtx._rpc('setPrompt', { args: { role: 'review', text: 'CUSTOM REVIEWER PROMPT.' } })
+    assert(setPrompt.ok && setPrompt.value.config.prompts.reviewOverridden === true, 'setPrompt overrides the review prompt')
+    replay(2, 1)
+    await new Promise((r) => setTimeout(r, 200))
+    assert(tuneLlmCalls === 2 && tuneSystem.startsWith('CUSTOM REVIEWER PROMPT.') && /in English\./.test(tuneSystem),
+      'custom review prompt is used and the language directive is still appended')
+
+    const clearPrompt = await tuneCtx._rpc('setPrompt', { args: { role: 'review', text: '   ' } })
+    assert(clearPrompt.ok && clearPrompt.value.config.prompts.reviewOverridden === false, 'blank text restores the default review prompt')
+
+    const badRole = await tuneCtx._rpc('setPrompt', { args: { role: 'other', text: 'x' } })
+    assert(!badRole.ok && badRole.error.code === 'skill-evolution/bad-role', 'setPrompt rejects unknown roles')
+
+    const reset = await tuneCtx._rpc('resetTuning', { args: {} })
+    assert(reset.ok && reset.value.config.minToolCalls === 5 && reset.value.config.signals.repeated === true,
+      'resetTuning restores the mount-config baseline')
+    assert(!existsSync(RUNTIME_CONFIG_FILE), 'runtime-config.json is removed when no override remains')
   } finally {
     if (existsSync(RUNTIME_CONFIG_FILE)) unlinkSync(RUNTIME_CONFIG_FILE)
   }
