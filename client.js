@@ -617,9 +617,14 @@ window.__ModuleLoader__.load({
 
 		function AuditPanel({ config, onChanged }) {
 			const audit = config.audit || {};
-			const [findings, setFindings] = useState([]);
+			const [findings, setFindings] = useState(audit.findings || []);
 			const [busy, setBusy] = useState(false);
 			const [lastRun, setLastRun] = useState(audit.lastRun);
+
+			useEffect(() => {
+				setFindings(audit.findings || []);
+				setLastRun(audit.lastRun);
+			}, [audit.findings, audit.lastRun]);
 
 			const runAudit = useCallback(() => {
 				setBusy(true);

@@ -933,6 +933,7 @@ export function apply(ctx, config = {}) {
       },
       audit: {
         lastRun: auditCache.lastRun,
+        findings: auditCache.findings,
         findingsCount: auditCache.findings.length,
         scheduled: auditTimer !== null,
       },
