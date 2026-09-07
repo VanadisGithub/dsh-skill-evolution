@@ -175,8 +175,11 @@ export function apply(ctx, config = {}) {
   const reviewsInFlight = new Set()
   /** skillName -> improvements performed this process lifetime */
   const improvementsPerSkill = new Map()
+  /** Audit results cache */
+  const auditCache = { lastRun: null, findings: [] }
   let nextTraceId = 1
   let nextPatternId = 1
+  let auditTimer = null
 
   // ------------------------------------------------------------------
   // Persistence
@@ -928,6 +931,11 @@ export function apply(ctx, config = {}) {
         improveOverridden: promptOverrides.improve !== undefined,
         maxLength: MAX_PROMPT_LENGTH,
       },
+      audit: {
+        lastRun: auditCache.lastRun,
+        findingsCount: auditCache.findings.length,
+        scheduled: auditTimer !== null,
+      },
       defaults: {
         ...JSON.parse(JSON.stringify(tuningDefaults)),
         llmProvider: config.llmProvider ?? 'deepseek',
@@ -1074,6 +1082,15 @@ export function apply(ctx, config = {}) {
         if (removed.length > 0) ctx.logger.info(`skill-evolution: cleared ${removed.length} evolved skill(s)`)
         return ok({ removed })
       }
+      case 'audit': {
+        const findings = auditSkills()
+        ctx.logger.info(`skill-evolution: manual audit triggered, found ${findings.length} issue(s)`)
+        return ok({
+          lastRun: auditCache.lastRun,
+          findings,
+          totalSkills: evolvedSkills.size,
+        })
+      }
       default:
         return fail('skill-evolution/unknown-endpoint', `unknown endpoint ${JSON.stringify(endpoint)}`)
     }
@@ -1116,6 +1133,110 @@ export function apply(ctx, config = {}) {
     persist(entry.record)
   }
 
+  // ------------------------------------------------------------------
+  // Automatic audit: detect mergeable, updatable, or stale skills
+  // ------------------------------------------------------------------
+
+  /**
+   * Compute tool-sequence similarity between two skills using Jaccard index
+   * on bigrams. Returns 0-1 where 1 means identical sequences.
+   */
+  function sequenceSimilarity(seqA, seqB) {
+    if (!Array.isArray(seqA) || !Array.isArray(seqB)) return 0
+    if (seqA.length === 0 || seqB.length === 0) return 0
+    const bigramsOf = (seq) => {
+      const set = new Set()
+      for (let i = 0; i < seq.length - 1; i++) set.add(`${seq[i]}→${seq[i + 1]}`)
+      if (seq.length === 1) set.add(seq[0])
+      return set
+    }
+    const a = bigramsOf(seqA)
+    const b = bigramsOf(seqB)
+    let intersection = 0
+    for (const bg of a) if (b.has(bg)) intersection++
+    const union = a.size + b.size - intersection
+    return union === 0 ? 0 : intersection / union
+  }
+
+  /**
+   * Run a full audit of all evolved skills. Detects:
+   * - mergeable: pairs with high sequence similarity (>0.7) that could be merged
+   * - stale: skills not invoked in a long time (optional, based on updatedAt)
+   * - lowValue: skills with low occurrences and no improvements
+   */
+  function auditSkills() {
+    const findings = []
+    const skills = [...evolvedSkills.values()]
+    
+    // Check for mergeable pairs
+    for (let i = 0; i < skills.length; i++) {
+      for (let j = i + 1; j < skills.length; j++) {
+        const a = skills[i].record
+        const b = skills[j].record
+        const similarity = sequenceSimilarity(a.toolSequence, b.toolSequence)
+        if (similarity > 0.7) {
+          findings.push({
+            type: 'mergeable',
+            skills: [a.name, b.name],
+            similarity: Math.round(similarity * 100),
+            message: `"${a.name}" and "${b.name}" have ${Math.round(similarity * 100)}% similar tool sequences and could be merged`,
+          })
+        }
+      }
+    }
+
+    // Check for stale skills (not updated in 30+ days)
+    const now = Date.now()
+    const staleThreshold = 30 * 24 * 60 * 60 * 1000 // 30 days
+    for (const entry of skills) {
+      const record = entry.record
+      const updatedAt = new Date(record.updatedAt).getTime()
+      const daysSinceUpdate = Math.floor((now - updatedAt) / (24 * 60 * 60 * 1000))
+      
+      if (daysSinceUpdate >= 30 && record.invocations === 0) {
+        findings.push({
+          type: 'stale',
+          skill: record.name,
+          daysSinceUpdate,
+          message: `"${record.name}" hasn't been updated in ${daysSinceUpdate} days and has never been invoked`,
+        })
+      }
+    }
+
+    // Check for low-value skills (single occurrence, no improvements)
+    for (const entry of skills) {
+      const record = entry.record
+      if (record.occurrences === 1 && record.improvements === 0 && record.invocations === 0) {
+        findings.push({
+          type: 'lowValue',
+          skill: record.name,
+          message: `"${record.name}" has only been seen once with no improvements or invocations`,
+        })
+      }
+    }
+
+    auditCache.lastRun = new Date().toISOString()
+    auditCache.findings = findings
+    return findings
+  }
+
+  /**
+   * Schedule periodic audit. Runs every 6 hours if there are skills to audit.
+   */
+  function scheduleAudit() {
+    if (auditTimer) clearTimeout(auditTimer)
+    if (evolvedSkills.size === 0) return
+    
+    const interval = 6 * 60 * 60 * 1000 // 6 hours
+    auditTimer = setTimeout(() => {
+      const findings = auditSkills()
+      if (findings.length > 0) {
+        ctx.logger.info(`skill-evolution: audit found ${findings.length} issue(s): ${findings.map(f => f.type).join(', ')}`)
+      }
+      scheduleAudit() // reschedule
+    }, interval)
+  }
+
   loadRuntimeConfig()
   if (modelSource === 'runtime') {
     ctx.logger.info(`skill-evolution: reviewer model from runtime-config.json: ${llmProvider}/${llmModel}`)
@@ -1125,6 +1246,7 @@ export function apply(ctx, config = {}) {
   for (const entry of evolvedSkills.values()) registerSkill(entry.record)
   if (evolvedSkills.size > 0) {
     ctx.logger.info(`skill-evolution: restored ${evolvedSkills.size} persisted evolved skill(s)`)
+    scheduleAudit() // start periodic audit
   }
 
   ctx.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload, signal) => {

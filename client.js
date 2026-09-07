@@ -615,6 +615,77 @@ window.__ModuleLoader__.load({
 				message ? h("p", { className: message.ok ? "dse-modelSaved" : "dse-failure" }, message.text) : null);
 		}
 
+		function AuditPanel({ config, onChanged }) {
+			const audit = config.audit || {};
+			const [findings, setFindings] = useState([]);
+			const [busy, setBusy] = useState(false);
+			const [lastRun, setLastRun] = useState(audit.lastRun);
+
+			const runAudit = useCallback(() => {
+				setBusy(true);
+				rpc("audit")
+					.then((result) => {
+						setBusy(false);
+						setFindings(result.findings || []);
+						setLastRun(result.lastRun);
+						onChanged();
+					})
+					.catch((e) => {
+						setBusy(false);
+						console.error("Audit failed:", e);
+					});
+			}, [onChanged]);
+
+			const findingType = (type) => {
+				switch (type) {
+					case "mergeable": return { label: "可合并", color: "#b45309" };
+					case "stale": return { label: "长期未使用", color: "#6b7280" };
+					case "lowValue": return { label: "低价值", color: "#9ca3af" };
+					default: return { label: type, color: "#6b7280" };
+				}
+			};
+
+			return h("details", { className: "dse-panel" },
+				h("summary", {}, "技能审计" + (audit.findingsCount > 0 ? "（" + audit.findingsCount + " 个问题）" : "")),
+				h("p", { className: "dse-panelNote" }, "自动检查技能库中的问题：可合并的相似技能、长期未使用的技能、低价值技能。每 6 小时自动运行一次，也可手动触发。"),
+				h("div", { className: "dse-panelActions" },
+					h("button", {
+						type: "button",
+						className: "dse-btn",
+						"data-primary": true,
+						disabled: busy,
+						onClick: runAudit
+					}, busy ? "审计中…" : "立即审计"),
+					lastRun ? h("span", { className: "dse-help" }, "上次：" + fmtTime(lastRun)) : null),
+				findings.length > 0 ? h("div", { style: { marginTop: "8px" } },
+					findings.map((f, i) => {
+						const typeInfo = findingType(f.type);
+						return h("div", {
+							key: i,
+							style: {
+								padding: "6px 8px",
+								marginBottom: "4px",
+								borderLeft: "3px solid " + typeInfo.color,
+								background: "var(--dsw-alias-bg-layer-1)",
+								borderRadius: "4px",
+								fontSize: "12px"
+							}
+						},
+							h("span", {
+								style: {
+									display: "inline-block",
+									padding: "1px 6px",
+									marginRight: "6px",
+									background: typeInfo.color,
+									color: "white",
+									borderRadius: "3px",
+									fontSize: "11px"
+								}
+							}, typeInfo.label),
+							h("span", {}, f.message));
+					})) : null);
+		}
+
 		function MasterSwitch({ config, onChanged }) {
 			const [busy, setBusy] = useState(false);
 			const onToggle = useCallback((e) => {
@@ -734,6 +805,7 @@ window.__ModuleLoader__.load({
 							h(ModelConfig, { config, onChanged: load }),
 							h(TuningPanel, { config, onChanged: load }),
 							h(PromptsPanel, { config, onChanged: load }),
+							h(AuditPanel, { config, onChanged: load }),
 							h(PatternList, { stats, config }))) : null);
 		}
 
