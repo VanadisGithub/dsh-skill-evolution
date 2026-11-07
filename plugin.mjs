@@ -82,7 +82,7 @@ const BOOL_TUNABLES = ['autoRegister', 'complexRequiresCorroboration']
 const SIGNAL_KEYS = ['complex', 'recovered', 'repeated']
 
 export const name = 'skill-evolution'
-export const inject = ['skills', 'llm', 'connection']
+export const inject = ['skills', 'llm']
 
 function safeRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : undefined
@@ -1250,12 +1250,21 @@ export function apply(ctx, config = {}) {
     scheduleAudit() // start periodic audit
   }
 
-  ctx.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload, signal) => {
+  // RPC channel: `connection` is not available in every profile (desktop/terminal
+  // may expose `webServer` instead), so inject it lazily like dsh-remote does.
+  ctx.inject(['connection'], (inner) => {
     try {
-      return handleRpc(endpoint, payload, signal)
+      inner.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload, signal) => {
+        try {
+          return handleRpc(endpoint, payload, signal)
+        } catch (error) {
+          inner.logger.warn(`skill-evolution: RPC ${endpoint} threw: ${String(error)}`)
+          return fail('skill-evolution/internal', String(error))
+        }
+      })
+      inner.logger.info('skill-evolution: RPC channel mounted')
     } catch (error) {
-      ctx.logger.warn(`skill-evolution: RPC ${endpoint} threw: ${String(error)}`)
-      return fail('skill-evolution/internal', String(error))
+      inner.logger.warn(`skill-evolution: RPC channel unavailable: ${String(error)}`)
     }
   })
 
